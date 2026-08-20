@@ -28,7 +28,7 @@ func (t *ResolveOutlineFeedbackTool) ReadOnly(json.RawMessage) bool        { ret
 func (t *ResolveOutlineFeedbackTool) ConcurrencySafe(json.RawMessage) bool { return false }
 func (t *ResolveOutlineFeedbackTool) StrictSchema() bool                   { return true }
 func (t *ResolveOutlineFeedbackTool) Schema() map[string]any {
-	return schema.Object(schema.Property("reason", schema.String("现有计划仍然适用的理由")).Required())
+	return strictObject(schema.Property("reason", schema.String("现有计划仍然适用的理由")).Required())
 }
 
 func (t *ResolveOutlineFeedbackTool) Execute(_ context.Context, args json.RawMessage) (json.RawMessage, error) {

@@ -26,7 +26,7 @@ func (t *SaveBookTool) ConcurrencySafe(_ json.RawMessage) bool { return false }
 func (t *SaveBookTool) StrictSchema() bool                     { return true }
 
 func (t *SaveBookTool) Schema() map[string]any {
-	return schema.Object(
+	return strictObject(
 		schema.Property("title", schema.String("正式书名，不带书名号")).Required(),
 		schema.Property("synopsis", schema.String("面向读者的无剧透小说简介")).Required(),
 	)

@@ -40,7 +40,7 @@ func (t *AuditFoundationTool) Schema() map[string]any {
 		schema.Property("evidence", schema.String("来自已落盘内容的具体冲突证据")).Required(),
 		schema.Property("suggestion", llmcontract.Nullable(schema.String("推荐修改方向；无需建议时为 null"))).Required(),
 	)
-	return schema.Object(
+	return strictObject(
 		schema.Property("fingerprint", schema.String("novel_context 返回的 foundation_status.fingerprint")).Required(),
 		schema.Property("ready", schema.Bool("所有基础设定是否已语义一致，可以进入写作")).Required(),
 		schema.Property("summary", schema.String("审查结论摘要")).Required(),

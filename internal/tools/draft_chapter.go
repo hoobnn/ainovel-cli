@@ -37,7 +37,7 @@ func (t *DraftChapterTool) Schema() map[string]any {
 	// mode 标 required 是为了兼容 OpenAI strict tool calling——strict 模式
 	// 要求所有 properties 都在 required 列表中。原来的"省略 mode 走 write
 	// 默认"行为现在需要模型显式传 mode="write"，Execute 的 default 分支不变。
-	return schema.Object(
+	return strictObject(
 		schema.Property("chapter", schema.Int("章节号")).Required(),
 		schema.Property("content", schema.String("章节正文")).Required(),
 		schema.Property("mode", schema.Enum("写入模式", "write", "append")).Required(),

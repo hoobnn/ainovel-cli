@@ -50,7 +50,7 @@ func (t *SaveReviewTool) Schema() map[string]any {
 		schema.Property("score", schema.Int("评分（0-100）")).Required(),
 		schema.Property("comment", schema.String("该维度的简要结论和证据；每个维度必填")).Required(),
 	)
-	return schema.Object(
+	return strictObject(
 		schema.Property("chapter", schema.Int("审阅的章节号（全局审阅填最新章节号）")).Required(),
 		schema.Property("scope", schema.Enum("审阅范围", "chapter", "global", "arc")).Required(),
 		schema.Property("dimensions", schema.Array("分维度评分；基础 rubric 由 Editor 提示提供，可按任务补充更具体维度", dimensionSchema)).Required(),

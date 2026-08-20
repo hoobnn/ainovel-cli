@@ -40,7 +40,7 @@ func (t *ReviseOutlineTool) Schema() map[string]any {
 		schema.Property("hook", schema.String("章末钩子")).Required(),
 		schema.Property("scenes", schema.Array("计划场景；无则为空数组", schema.String(""))).Required(),
 	)
-	return schema.Object(
+	return strictObject(
 		schema.Property("from_chapter", schema.Int("从这一章开始替换尚未发生的计划")).Required(),
 		schema.Property("replacement", schema.Array("完整替换尾段；需要保留的后续章节也必须包含", entry)).Required(),
 		schema.Property("reason", schema.String("本次修订原因")).Required(),

@@ -125,13 +125,15 @@ func Resolve(model any) Resolution {
 }
 
 // Plan 解析协议并在原生模式下生成调用选项;prompt contract 模式返回 nil opts。
+// 原生模式发出的 schema 一律先过 StrictObjects:Anthropic 的 strict 校验要求
+// 每个 object 显式 additionalProperties:false 且不做自动补全,契约定义无需各自维护。
 func Plan(model any, c Contract) ([]agentcore.CallOption, Resolution) {
 	res := Resolve(model)
 	if res.Mode != ModeNativeJSONSchema {
 		return nil, res
 	}
 	return []agentcore.CallOption{
-		agentcore.WithJSONSchema(c.Name, c.Description, c.Schema, res.Strict),
+		agentcore.WithJSONSchema(c.Name, c.Description, StrictObjects(c.Schema), res.Strict),
 	}, res
 }
 
@@ -181,12 +183,186 @@ func Nullable(s map[string]any) map[string]any {
 	return out
 }
 
+// StrictObjects 返回 schema 的规范化拷贝:为其中每个 object 节点显式补上
+// additionalProperties:false,并把「可空联合 type + enum」节点改写为 anyOf。
+// OpenAI 兼容路径由 litellm 请求期自动补全,但 Anthropic 原生 strict
+// (structured outputs)校验要求 additionalProperties 显式在场且不做补全,
+// 缺失即 HTTP 400(For 'object' type, 'additionalProperties' must be explicitly
+// set to false);带 enum 的节点则只接受单一字符串 type,联合 type 同样
+// HTTP 400(Enum value 'x' does not match declared type)。已显式声明的
+// additionalProperties 保持原值。不修改传入 map。
+func StrictObjects(s map[string]any) map[string]any {
+	out := maps.Clone(s)
+	if converted, ok := nullableEnumAnyOf(out); ok {
+		out = converted
+	}
+	if typeIncludes(out["type"], "object") || out["properties"] != nil {
+		if _, ok := out["additionalProperties"]; !ok {
+			out["additionalProperties"] = false
+		}
+	}
+	if props, ok := out["properties"].(map[string]any); ok {
+		cloned := maps.Clone(props)
+		for name, sub := range cloned {
+			if subMap, ok := sub.(map[string]any); ok {
+				cloned[name] = StrictObjects(subMap)
+			}
+		}
+		out["properties"] = cloned
+	}
+	if items, ok := out["items"].(map[string]any); ok {
+		out["items"] = StrictObjects(items)
+	}
+	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+		list, ok := out[key].([]any)
+		if !ok {
+			continue
+		}
+		cloned := slices.Clone(list)
+		for i, sub := range cloned {
+			if subMap, ok := sub.(map[string]any); ok {
+				cloned[i] = StrictObjects(subMap)
+			}
+		}
+		out[key] = cloned
+	}
+	if defs, ok := out["$defs"].(map[string]any); ok {
+		cloned := maps.Clone(defs)
+		for name, sub := range cloned {
+			if subMap, ok := sub.(map[string]any); ok {
+				cloned[name] = StrictObjects(subMap)
+			}
+		}
+		out["$defs"] = cloned
+	}
+	return out
+}
+
+// nullableEnumAnyOf 把 Nullable(Enum) 产出的 {"type":["<t>","null"],
+// "enum":[...,null]} 改写为语义等价的
+// {"anyOf":[{"type":"<t>","enum":[...]},{"type":"null"}]}。仅处理
+// 「单一基础类型 + null」且 enum 为字符串/null 的节点,其余原样返回。
+func nullableEnumAnyOf(s map[string]any) (map[string]any, bool) {
+	types, err := schemaTypes(s["type"])
+	if err != nil || len(types) != 2 || !slices.Contains(types, "null") {
+		return nil, false
+	}
+	rawEnum, exists := s["enum"]
+	if !exists {
+		return nil, false
+	}
+	values, err := enumValues(rawEnum)
+	if err != nil {
+		return nil, false
+	}
+	base := ""
+	for _, t := range types {
+		if t != "null" {
+			base = t
+			break
+		}
+	}
+	if base == "" {
+		return nil, false
+	}
+	nonNull := make([]any, 0, len(values))
+	for _, value := range values {
+		if value != nil {
+			nonNull = append(nonNull, value)
+		}
+	}
+	out := maps.Clone(s)
+	delete(out, "type")
+	delete(out, "enum")
+	out["anyOf"] = []any{
+		map[string]any{"type": base, "enum": nonNull},
+		map[string]any{"type": "null"},
+	}
+	return out, true
+}
+
 // ValidateStrictReady 递归校验 schema 满足 OpenAI strict 子集的结构前提:
-// 所有 object 的属性都必须列入 required(可选语义用 null 联合表达)。litellm
-// 在请求期做同样校验并自动补 additionalProperties:false;契约测试用本函数
-// 前置断言(RFC §11.1),不把结构问题留到运行时。
+// 所有 object 的属性都必须列入 required(可选语义用 null 联合表达)。这是
+// 自动补全救不回来的结构问题;additionalProperties:false 属于可机械注入的
+// 键,由 StrictObjects 在各发送出口统一补上。契约测试用本函数前置断言
+// (RFC §11.1),不把结构问题留到运行时。
 func ValidateStrictReady(s map[string]any) error {
 	return validateStrictReady(s, "$")
+}
+
+// ValidateStrictWire 校验 schema 已是可直接上线发送的 strict 形态:除
+// ValidateStrictReady 的结构前提外,每个 object 还必须显式携带
+// additionalProperties:false,且带 enum 的节点不得使用联合 type(均为
+// Anthropic strict 工具的硬性要求)。声明
+// StrictSchema()=true 的工具,其 Schema() 返回值必须通过本校验——工具
+// schema 不经过 Plan,发送前没有第二次归一化机会。
+func ValidateStrictWire(s map[string]any) error {
+	return validateStrictWire(s, "$")
+}
+
+func validateStrictWire(s map[string]any, path string) error {
+	if err := validateStrictReady(s, path); err != nil {
+		return err
+	}
+	if err := validateExplicitAdditional(s, path); err != nil {
+		return err
+	}
+	return validateWireEnums(s, path)
+}
+
+// validateWireEnums 拒绝「联合 type + enum」节点:Anthropic 校验器对带 enum
+// 的节点只接受单一字符串 type,该形态必须先经 StrictObjects 改写为 anyOf。
+func validateWireEnums(s map[string]any, path string) error {
+	if _, hasEnum := s["enum"]; hasEnum {
+		if _, single := s["type"].(string); !single {
+			return fmt.Errorf("%s 同时携带 enum 与联合 type(Anthropic 校验拒绝),可空 enum 应改写为 anyOf", path)
+		}
+	}
+	if props, ok := s["properties"].(map[string]any); ok {
+		for name, sub := range props {
+			if subMap, ok := sub.(map[string]any); ok {
+				if err := validateWireEnums(subMap, path+"."+name); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if items, ok := s["items"].(map[string]any); ok {
+		if err := validateWireEnums(items, path+"[]"); err != nil {
+			return err
+		}
+	}
+	if list, ok := s["anyOf"].([]any); ok {
+		for i, sub := range list {
+			if subMap, ok := sub.(map[string]any); ok {
+				if err := validateWireEnums(subMap, fmt.Sprintf("%s.anyOf[%d]", path, i)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateExplicitAdditional(s map[string]any, path string) error {
+	if typeIncludes(s["type"], "object") || s["properties"] != nil {
+		if v, ok := s["additionalProperties"]; !ok || v != false {
+			return fmt.Errorf("%s 缺少 additionalProperties:false(Anthropic strict 要求显式声明)", path)
+		}
+	}
+	if props, ok := s["properties"].(map[string]any); ok {
+		for name, sub := range props {
+			if subMap, ok := sub.(map[string]any); ok {
+				if err := validateExplicitAdditional(subMap, path+"."+name); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if items, ok := s["items"].(map[string]any); ok {
+		return validateExplicitAdditional(items, path+"[]")
+	}
+	return nil
 }
 
 func validateStrictReady(s map[string]any, path string) error {

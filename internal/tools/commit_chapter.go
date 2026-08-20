@@ -72,7 +72,7 @@ func (t *CommitChapterTool) StrictSchema() bool                     { return tru
 func (t *CommitChapterTool) Schema() map[string]any {
 	props := []schema.Prop{schema.Property("chapter", schema.Int("章节号")).Required()}
 	props = append(props, chapterfacts.Properties(true)...)
-	return schema.Object(props...)
+	return strictObject(props...)
 }
 
 func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
