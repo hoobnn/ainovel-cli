@@ -186,7 +186,7 @@ Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `worl
 
 ### 5.1 读类工具
 
-`novel_context(scope)` / `read_chapter(n)` —— 任何时候可调用，不依赖前置状态，返回数据足够 LLM 独立决策。`novel_context(chapter=N)` 额外注入该章机械违规（如有）；architect 路径注入已完成卷/当前卷弧摘要、角色快照、大纲反馈池与 foundation 状态。长篇规划概览只携带当前弧章节，其余卷弧保留结构骨架；需要检查某个已展开弧时用 `novel_context(volume=V, arc=A)` 精确读取。扩弧时，已发生内容是事实，骨架只是计划；Architect 可在 `expand_arc` 中同步修订目标弧的 title/goal 并展开章节。
+`novel_context(scope)` / `read_chapter(n)` —— 任何时候可调用，不依赖前置状态，返回数据足够 LLM 独立决策。`novel_context(chapter=N)` 额外注入该章机械违规（如有）；architect 路径注入已完成卷/当前卷弧摘要、角色快照、大纲反馈池与 foundation 状态。长篇规划概览只携带当前弧章节，其余卷弧保留结构骨架；用 `novel_context(volume=V, arc=A)` 精确读取时，已展开弧返回章节详情，未展开弧返回骨架目标。扩弧时，已发生内容是事实，骨架只是计划；Architect 可在 `expand_arc` 中同步修订目标弧的 title/goal 并展开章节。
 
 ### 5.2 写类工具（单文件原子 + 分级恢复语义）
 

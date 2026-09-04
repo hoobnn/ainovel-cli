@@ -96,7 +96,7 @@ func (t *ContextTool) Name() string { return "novel_context" }
 func (t *ContextTool) Description() string {
 	return "获取小说当前状态和创作上下文。" +
 		"不传 chapter：返回 progress_status（phase/flow/next_chapter/pending_rewrites 等进度字段）+ 精简规划概览，用于判断下一步该做什么；" +
-		"长篇 Architect 可传 volume + arc 聚焦读取一个已展开弧的章节详情。" +
+		"长篇 Architect 可传 volume + arc 聚焦读取指定弧：已展开弧包含章节详情，骨架弧包含 title/goal/estimated_chapters。" +
 		"传 chapter=N：额外返回该章的前情摘要、伏笔、角色状态、风格规则等写作上下文"
 }
 func (t *ContextTool) Label() string { return "加载上下文" }
@@ -108,8 +108,8 @@ func (t *ContextTool) ConcurrencySafe(_ json.RawMessage) bool { return true }
 func (t *ContextTool) Schema() map[string]any {
 	return schema.Object(
 		schema.Property("chapter", schema.Int("章节号。不传则返回进度状态和基础设定（Architect 用）；传入则额外返回该章的写作上下文（Writer/Editor 用）")),
-		schema.Property("volume", schema.Int("长篇 Architect 可选：聚焦读取的卷序号；必须与 arc 同时传入，不能与 chapter 同时使用")),
-		schema.Property("arc", schema.Int("长篇 Architect 可选：聚焦读取的卷内弧序号；必须与 volume 同时传入，不能与 chapter 同时使用")),
+		schema.Property("volume", schema.Int("长篇 Architect 可选：聚焦读取的卷序号；已展开弧返回章节详情，骨架弧返回规划目标；必须与 arc 同时传入，不能与 chapter 同时使用")),
+		schema.Property("arc", schema.Int("长篇 Architect 可选：聚焦读取的卷内弧序号；已展开弧返回章节详情，骨架弧返回规划目标；必须与 volume 同时传入，不能与 chapter 同时使用")),
 	)
 }
 

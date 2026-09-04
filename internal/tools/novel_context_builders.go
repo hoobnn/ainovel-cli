@@ -701,13 +701,9 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 			latestCompleted = progress.LatestCompleted()
 		}
 		if requestedVolume > 0 {
-			target, ok := findPlanningArc(layered, requestedVolume, requestedArc)
+			_, ok := findPlanningArc(layered, requestedVolume, requestedArc)
 			if !ok {
-				reads.fail(fmt.Errorf("planning detail scope v%da%d not found", requestedVolume, requestedArc))
-				return
-			}
-			if !target.IsExpanded() {
-				reads.fail(fmt.Errorf("planning detail scope v%da%d is not expanded", requestedVolume, requestedArc))
+				reads.fail(fmt.Errorf("planning scope v%da%d not found", requestedVolume, requestedArc))
 				return
 			}
 		}
@@ -741,7 +737,7 @@ func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope,
 		}
 	} else {
 		if requestedVolume > 0 {
-			reads.fail(fmt.Errorf("planning detail scope requires a layered outline"))
+			reads.fail(fmt.Errorf("planning scope requires a layered outline"))
 			return
 		}
 		if outline, err := t.store.Outline.LoadOutline(); err == nil && len(outline) > 0 {

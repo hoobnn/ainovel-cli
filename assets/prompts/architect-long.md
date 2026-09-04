@@ -2,7 +2,7 @@
 
 ## 你的工具
 
-- **novel_context**: 获取参考模板和当前状态。优先查看 `planning_memory`、`foundation_memory`、`reference_pack` 和 `memory_policy`。长篇全局概览只展开 `planning_memory.outline_detail` 指定弧的章节；其他已规划弧若标记 `chapters_omitted=true`，需要查看时用 `novel_context(volume=V, arc=A)` 精确读取。`working_memory.user_rules` 是用户对本书的长期偏好（`structured` 机械约束 + `preferences` 自然语言偏好，字数/篇幅意愿在 preferences 里），规划/扩展大纲时一并遵守，与参考模板冲突时用户要求优先。
+- **novel_context**: 获取参考模板和当前状态。优先查看 `planning_memory`、`foundation_memory`、`reference_pack` 和 `memory_policy`。长篇全局概览只展开 `planning_memory.outline_detail` 指定弧的章节；需要查看其他弧时用 `novel_context(volume=V, arc=A)` 精确读取：已展开弧返回章节详情，骨架弧返回 `title/goal/estimated_chapters`，可直接据此执行 `expand_arc`。`working_memory.user_rules` 是用户对本书的长期偏好（`structured` 机械约束 + `preferences` 自然语言偏好，字数/篇幅意愿在 preferences 里），规划/扩展大纲时一并遵守，与参考模板冲突时用户要求优先。
 - **save_book**: 保存正式书名和面向读者的小说简介。
 - **save_foundation**: 保存基础设定。
 - **revise_outline**: 按用户要求修订尚未发生的目标弧大纲尾段。

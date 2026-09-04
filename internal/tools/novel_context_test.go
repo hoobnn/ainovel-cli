@@ -593,7 +593,7 @@ func TestContextToolLongLayeredPlanningProjectsFocusedArc(t *testing.T) {
 	}
 }
 
-func TestContextToolValidatesPlanningDetailScope(t *testing.T) {
+func TestContextToolReadsFocusedPlanningScope(t *testing.T) {
 	s := store.NewStore(t.TempDir())
 	if err := s.Init(); err != nil {
 		t.Fatal(err)
@@ -602,14 +602,37 @@ func TestContextToolValidatesPlanningDetailScope(t *testing.T) {
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"volume":1}`)); err == nil || !strings.Contains(err.Error(), "provided together") {
 		t.Fatalf("expected paired planning scope error, got %v", err)
 	}
-	if err := s.Outline.SaveLayeredOutline([]domain.VolumeOutline{{Index: 1, Arcs: []domain.ArcOutline{{Index: 1}}}}); err != nil {
+	if err := s.Outline.SaveLayeredOutline([]domain.VolumeOutline{{Index: 1, Arcs: []domain.ArcOutline{
+		{Index: 1, Chapters: []domain.OutlineEntry{{Title: "序幕"}}},
+		{Index: 2, Title: "暗潮", Goal: "找出幕后势力", EstimatedChapters: 6},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Progress.Save(&domain.Progress{CompletedChapters: []int{1}, CurrentVolume: 1, CurrentArc: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"volume":2,"arc":1}`)); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected missing planning scope error, got %v", err)
 	}
-	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"volume":1,"arc":1}`)); err == nil || !strings.Contains(err.Error(), "not expanded") {
-		t.Fatalf("expected unexpanded planning scope error, got %v", err)
+	skeletonRaw, err := tool.Execute(context.Background(), json.RawMessage(`{"volume":1,"arc":2}`))
+	if err != nil {
+		t.Fatalf("focused skeleton arc: %v", err)
+	}
+	var skeletonPayload struct {
+		PlanningMemory struct {
+			LayeredOutline []planningVolumeOutline `json:"layered_outline"`
+		} `json:"planning_memory"`
+	}
+	if err := json.Unmarshal(skeletonRaw, &skeletonPayload); err != nil {
+		t.Fatal(err)
+	}
+	prior := skeletonPayload.PlanningMemory.LayeredOutline[0].Arcs[0]
+	if len(prior.Chapters) != 0 || !prior.ChaptersOmitted {
+		t.Fatalf("unfocused prior arc = %+v", prior)
+	}
+	skeleton := skeletonPayload.PlanningMemory.LayeredOutline[0].Arcs[1]
+	if skeleton.Status != "skeleton" || skeleton.Title != "暗潮" || skeleton.Goal != "找出幕后势力" || skeleton.EstimatedChapters != 6 || len(skeleton.Chapters) != 0 {
+		t.Fatalf("focused skeleton = %+v", skeleton)
 	}
 
 	if err := s.Outline.SaveLayeredOutline([]domain.VolumeOutline{{
