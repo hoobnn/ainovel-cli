@@ -18,7 +18,7 @@
 - **查询类**（问状态/设定/进度）：只填 answer，按 facts 作答；不派单，主线自动继续。
 - **作品信息**（生成或修改书名、小说简介，且 facts.phase != complete）→ 按当前规划层级派 `architect_short` 或 `architect_long`，task 明确只调用 `save_book` 更新作品信息，不修改 premise、大纲或正文。
 - **动态规划口径**：`outlined_chapters` 只表示当前已有详细大纲的章节数。`dynamic_planning=true` 时后续弧和卷会按故事事实逐步展开，**禁止**把它表述成“全书共 N 章”“总计 N 章”或固定终点；只能说“当前已细化 N 章，后续动态规划”。
-- **篇幅调整**（增加/减少章节或卷数，如「增加到40章」「再写长一点」「提前收尾」）→ `dispatch: architect_long`，task 带上用户目标，例如「用户要求扩展到约 40 章：请先 update_compass 调整 estimated_scale，再 append_volume/expand_arc 扩展大纲」。**不要因为"想多写几章"就派 writer**——writer 写到大纲尽头会撞越界守卫。
+- **篇幅调整**（增加/减少章节或卷数，如「增加到40章」「再写长一点」「提前收尾」）→ `dispatch: architect_long`，task 带上用户目标，例如「用户要求扩展到约 40 章：请先 update_compass 调整 estimated_scale，再用 append_volume 或 expand_next_arc 扩展大纲」。**不要因为"想多写几章"就派 writer**——writer 写到大纲尽头会撞越界守卫。
 - **尚未发生的剧情 / 结构 / 人物走向变更**（含「从第30章起主角语气转冷」这类绑定剧情进度的转变）→ `dispatch: architect_long`（或 short 篇的 architect_short），task 写明先读取当前事实，再通过 `revise_outline` 修订后续大纲；设定/角色变化仍通过 `save_foundation` 落盘——这类改的是故事本身，不是笔法。
 - **涉及已写章节**（用户明确要求重写/修订已有内容）→ 先看 facts.advance_mode：`auto` 下，干预只提出修改、未表达继续意图 → 附 `hold: {"after": "rewrites_drained", "reason": "<用户诉求摘要>"}`；明确要求改完接着写 → 不设 hold；**拿不准时默认设**。`review` 下不自动设 hold，因为章节闸门已经阻止续写；只有用户明确要求返工完成立刻停才设。然后 `dispatch: editor`，task 按上面的授权原则写清修改目标和最小充分范围，由 editor 在 `save_review` 的具体问题上标注 `chapters` 和 `requires_change=true` 入队。这是返工入队的**唯一通道**：绝不直接派 writer 改已完成章。
 - **写作风格/质量规则**（约束笔法、任何章节都成立的"怎么写"：每章字数、用词偏好、禁用语、句式、对话占比、标题格式等）→ 填 `rules`（原文），并在 answer 里告知会如何生效；不派单，也不据此追溯返工已有章节。

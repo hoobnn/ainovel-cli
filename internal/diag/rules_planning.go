@@ -116,7 +116,7 @@ func OutlineExhausted(snap *Snapshot) []Finding {
 		Target:     "runtime.recovery",
 		Title:      fmt.Sprintf("大纲耗尽: 已完成 %d 章 >= 已规划 %d 章", completed, outlinedCount),
 		Evidence:   fmt.Sprintf("phase=%s, completed=%d, outlined=%d", p.Phase, completed, outlinedCount),
-		Suggestion: "展开/新卷信号可能未触发。检查宿主侧提交策略和恢复逻辑，确认弧边界检测、expand_arc 或 append_volume 是否正常执行。",
+		Suggestion: "展开/新卷信号可能未触发。检查宿主侧提交策略和恢复逻辑，确认弧边界检测、expand_next_arc 或 append_volume 是否正常执行。",
 	}}
 }
 

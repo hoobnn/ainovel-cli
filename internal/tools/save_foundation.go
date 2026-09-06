@@ -24,7 +24,7 @@ func NewSaveFoundationTool(store *store.Store) *SaveFoundationTool {
 
 func (t *SaveFoundationTool) Name() string { return "save_foundation" }
 func (t *SaveFoundationTool) Description() string {
-	return "保存小说基础设定（premise/outline/characters/world_rules/compass 等）。**这是唯一持久化入口**：未经此工具调用保存的内容不会进入 store，只在消息里输出 Markdown/JSON 等于丢失。参数固定为 {type, content, scale?, volume?, arc?}。type 可选 premise / outline / layered_outline / characters / world_rules / expand_arc / append_volume / update_compass / complete_book。premise 时 content 必须是 Markdown 字符串；其他类型 content 优先直接传 JSON 数组或对象。expand_arc 校准并展开一个未写骨架弧（需 volume + arc，content 为 {title, goal, chapters}，可依据已完成正文修订原骨架目标）；append_volume 追加新卷（content 为完整 VolumeOutline JSON，含弧结构；顶层带 \"final\": true 即宣告收官卷——全书在该卷收束，所有章节写完后自动完结，无需再调 complete_book）；update_compass 更新终局方向（content 为 StoryCompass JSON）；complete_book 宣告全书完结（content 传空对象 {}，直接推 Phase=Complete；工具会校验：大纲内章节已全部写完、无返工队列、compass 无未收束 open_threads——确认长线已收束须先 update_compass 清空 open_threads 落盘，想提前收束用 append_volume 的 final 收官卷）。append_volume / complete_book 必须带 reason 参数（一句话判定理由，对照完结判定清单，记入裁定审计）。scale 可选，仅允许 short / mid / long。"
+	return "保存小说基础设定（premise/outline/characters/world_rules/compass 等）。**这是这些设定的持久化入口**：未经工具调用保存的内容不会进入 store，只在消息里输出 Markdown/JSON 等于丢失。type 可选 premise / outline / layered_outline / characters / world_rules / append_volume / update_compass / complete_book。premise 时 content 必须是 Markdown 字符串；其他类型 content 优先直接传 JSON 数组或对象。append_volume 追加新卷（content 为不带卷弧 index 的 VolumeOutline JSON，序号由系统生成；顶层带 \"final\": true 即宣告收官卷——全书在该卷收束，所有章节写完后自动完结，无需再调 complete_book）；update_compass 更新终局方向（content 为 StoryCompass JSON）；complete_book 宣告全书完结（content 传空对象 {}，直接推 Phase=Complete；工具会校验：大纲内章节已全部写完、无返工队列、compass 无未收束 open_threads——确认长线已收束须先 update_compass 清空 open_threads 落盘，想提前收束用 append_volume 的 final 收官卷）。append_volume / complete_book 必须带 reason 参数（一句话判定理由，对照完结判定清单，记入裁定审计）。scale 可选，仅允许 short / mid / long。"
 }
 func (t *SaveFoundationTool) Label() string { return "保存设定" }
 
@@ -34,13 +34,11 @@ func (t *SaveFoundationTool) ConcurrencySafe(_ json.RawMessage) bool { return fa
 
 func (t *SaveFoundationTool) Schema() map[string]any {
 	return schema.Object(
-		schema.Property("type", schema.Enum("设定类型", "premise", "outline", "layered_outline", "characters", "world_rules", "expand_arc", "append_volume", "update_compass", "complete_book")).Required(),
+		schema.Property("type", schema.Enum("设定类型", "premise", "outline", "layered_outline", "characters", "world_rules", "append_volume", "update_compass", "complete_book")).Required(),
 		schema.Property("content", map[string]any{
-			"description": "内容。premise 传 Markdown 字符串；其他类型直接传 JSON 数组或对象即可，也兼容传 JSON 字符串。expand_arc 时传 {title, goal, chapters}，title/goal 是结合已完成事实校准后的目标弧规划。",
+			"description": "内容。premise 传 Markdown 字符串；其他类型直接传 JSON 数组或对象即可，也兼容传 JSON 字符串。",
 		}).Required(),
 		schema.Property("scale", schema.Enum("规划级别", "short", "mid", "long")),
-		schema.Property("volume", schema.Int("目标卷序号（仅 expand_arc 时必传）")),
-		schema.Property("arc", schema.Int("目标弧序号（仅 expand_arc 时必传）")),
 		schema.Property("reason", schema.String("卷末判定理由（append_volume / complete_book 时必填）：对照完结判定清单，一句话说明为何续卷、宣告收官或完结")),
 	)
 }
@@ -50,8 +48,6 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		Type    string          `json:"type"`
 		Content json.RawMessage `json:"content"`
 		Scale   string          `json:"scale"`
-		Volume  int             `json:"volume"`
-		Arc     int             `json:"arc"`
 		Reason  string          `json:"reason"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
@@ -81,7 +77,7 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		switch progress.Phase {
 		case domain.PhaseWriting:
 			return nil, fmt.Errorf(
-				"写作阶段禁止使用 %s 全量覆盖大纲。请使用 revise_outline 修订未发生章节、expand_arc 展开骨架弧，或 append_volume 追加新卷: %w",
+				"写作阶段禁止使用 %s 全量覆盖大纲。请使用 revise_outline 修订未发生章节、expand_next_arc 展开下一骨架弧，或 append_volume 追加新卷: %w",
 				a.Type, errs.ErrToolPrecondition)
 		case domain.PhaseComplete:
 			return nil, fmt.Errorf(
@@ -214,26 +210,6 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		}
 		result["count"] = len(rules)
 
-	case "expand_arc":
-		if a.Volume <= 0 || a.Arc <= 0 {
-			return nil, fmt.Errorf("expand_arc requires volume and arc parameters: %w", errs.ErrToolArgs)
-		}
-		var expansion domain.ArcExpansion
-		if err := decode("expand_arc", &expansion); err != nil {
-			return nil, err
-		}
-		if err := t.store.ExpandArc(a.Volume, a.Arc, expansion); err != nil {
-			return nil, fmt.Errorf("expand arc: %w: %w", errs.ErrStoreWrite, err)
-		}
-		result["volume"] = a.Volume
-		result["arc"] = a.Arc
-		result["title"] = expansion.Title
-		result["goal"] = expansion.Goal
-		result["chapters"] = len(expansion.Chapters)
-		if err := t.consumeWriterFeedback(); err != nil {
-			return nil, err
-		}
-
 	case "append_volume":
 		p, err := t.store.Progress.Load()
 		if err != nil {
@@ -250,25 +226,26 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		if err != nil {
 			return nil, fmt.Errorf("load layered outline: %w: %w", errs.ErrStoreRead, err)
 		}
-		if err := t.store.AppendVolume(vol); err != nil {
+		saved, err := t.store.AppendVolume(vol)
+		if err != nil {
 			return nil, fmt.Errorf("append volume: %w: %w", errs.ErrStoreWrite, err)
 		}
-		result["volume"] = vol.Index
-		if vol.Final {
+		result["volume"] = saved.Index
+		if saved.Final {
 			result["final_volume"] = true
 		} else if domain.FinaleVolume(prior) > 0 {
 			// 事实回显：此前宣告的收官态因追加普通新卷而解除（新卷成为末卷）
 			result["finale_released"] = true
 		}
-		result["arcs"] = len(vol.Arcs)
+		result["arcs"] = len(saved.Arcs)
 		chCount := 0
-		for _, arc := range vol.Arcs {
+		for _, arc := range saved.Arcs {
 			chCount += len(arc.Chapters)
 		}
 		if chCount > 0 {
 			result["chapters"] = chCount
 		}
-		if err := t.consumeWriterFeedback(); err != nil {
+		if err := consumeWriterFeedback(t.store); err != nil {
 			return nil, err
 		}
 
@@ -344,22 +321,15 @@ func (t *SaveFoundationTool) Execute(_ context.Context, args json.RawMessage) (j
 		}
 		result["ending_direction"] = compass.EndingDirection
 		result["last_updated"] = compass.LastUpdated
-		if err := t.consumeWriterFeedback(); err != nil {
+		if err := consumeWriterFeedback(t.store); err != nil {
 			return nil, err
 		}
 
 	default:
-		return nil, fmt.Errorf("unknown type %q, expected premise/outline/layered_outline/characters/world_rules/expand_arc/append_volume/update_compass/complete_book: %w", a.Type, errs.ErrToolArgs)
+		return nil, fmt.Errorf("unknown type %q, expected premise/outline/layered_outline/characters/world_rules/append_volume/update_compass/complete_book: %w", a.Type, errs.ErrToolArgs)
 	}
 
-	// checkpoint
-	scope := domain.GlobalScope()
-	if a.Type == "expand_arc" {
-		scope = domain.ArcScope(a.Volume, a.Arc)
-	} else if a.Type == "append_volume" {
-		scope = domain.GlobalScope()
-	}
-	if _, err := t.store.Checkpoints.AppendArtifact(scope, a.Type, foundationArtifact(a.Type)); err != nil {
+	if _, err := t.store.Checkpoints.AppendArtifact(domain.GlobalScope(), a.Type, foundationArtifact(a.Type)); err != nil {
 		return nil, fmt.Errorf("checkpoint foundation %s: %w: %w", a.Type, errs.ErrStoreWrite, err)
 	}
 
@@ -385,7 +355,7 @@ func foundationArtifact(t string) string {
 		return "premise.md"
 	case "outline":
 		return "outline.json"
-	case "layered_outline", "expand_arc", "append_volume":
+	case "layered_outline", "append_volume":
 		return "layered_outline.json"
 	case "complete_book":
 		return "meta/progress.json"
@@ -478,8 +448,8 @@ func (t *SaveFoundationTool) recordVolumeEndDecision(action, reason string, fact
 }
 
 // consumeWriterFeedback 在结构操作成功后清除已处理的规划反馈。
-func (t *SaveFoundationTool) consumeWriterFeedback() error {
-	if err := t.store.Outline.ClearOutlineFeedback(); err != nil {
+func consumeWriterFeedback(st *store.Store) error {
+	if err := st.Outline.ClearOutlineFeedback(); err != nil {
 		return fmt.Errorf("clear outline feedback: %w: %w", errs.ErrStoreWrite, err)
 	}
 	return nil

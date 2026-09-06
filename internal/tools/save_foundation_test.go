@@ -339,7 +339,7 @@ func TestSaveFoundationAppendVolume(t *testing.T) {
 	}
 }
 
-func TestSaveFoundationExpandArcCalibratesTarget(t *testing.T) {
+func TestExpandNextArcCalibratesTarget(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)
 	if err := s.Init(); err != nil {
@@ -357,21 +357,35 @@ func TestSaveFoundationExpandArcCalibratesTarget(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("SaveLayeredOutline: %v", err)
 	}
+	// v0.7.9 以前 append_volume 允许模型漏填机械 index；新工具按结构位置处理。
+	legacy, err := os.ReadFile(filepath.Join(dir, "layered_outline.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy = []byte(strings.ReplaceAll(string(legacy), `"index": 2`, `"index": 0`))
+	if err := os.WriteFile(filepath.Join(dir, "layered_outline.json"), legacy, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Progress.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.CompletedChapters = []int{1}
+	if err := s.Progress.Save(p); err != nil {
+		t.Fatal(err)
+	}
 
-	tool := NewSaveFoundationTool(s)
+	tool := NewExpandNextArcTool(s)
 	args, _ := json.Marshal(map[string]any{
-		"type": "expand_arc", "volume": 1, "arc": 2,
-		"content": map[string]any{
-			"title": "裂盟之后",
-			"goal":  "让分裂后的双方以不同选择推进同一主线",
-			"chapters": []map[string]any{{
-				"title": "各走一边", "core_event": "双方分别追索真相", "hook": "两条线索意外重合", "scenes": []string{"分道", "追索"},
-			}},
-		},
+		"title": "裂盟之后",
+		"goal":  "让分裂后的双方以不同选择推进同一主线",
+		"chapters": []map[string]any{{
+			"title": "各走一边", "core_event": "双方分别追索真相", "hook": "两条线索意外重合", "scenes": []string{"分道", "追索"},
+		}},
 	})
 	result, err := tool.Execute(context.Background(), args)
 	if err != nil {
-		t.Fatalf("Execute expand_arc: %v", err)
+		t.Fatalf("Execute expand_next_arc: %v", err)
 	}
 	var facts map[string]any
 	if err := json.Unmarshal(result, &facts); err != nil {
@@ -389,7 +403,7 @@ func TestSaveFoundationExpandArcCalibratesTarget(t *testing.T) {
 	}
 }
 
-func TestSaveFoundationAppendVolumeValidation(t *testing.T) {
+func TestSaveFoundationAppendVolumeAssignsIndexes(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)
 	if err := s.Init(); err != nil {
@@ -415,21 +429,35 @@ func TestSaveFoundationAppendVolumeValidation(t *testing.T) {
 	})
 	tool.Execute(context.Background(), layeredArgs)
 
-	// Index 不递增 → 应失败（结构性校验）
+	// 模型提供的机械序号被忽略，store 按故事顺序生成。
 	appendArgs, _ := json.Marshal(map[string]any{
 		"type":   "append_volume",
 		"reason": "测试理由",
 		"content": map[string]any{
-			"index": 1, "title": "重复 Index", "theme": "x",
+			"index": 99, "title": "第二卷", "theme": "x",
 			"arcs": []map[string]any{{
-				"index": 1, "title": "弧一", "goal": "目标",
+				"index": 99, "title": "弧一", "goal": "目标",
 				"chapters": []map[string]any{{"title": "章", "core_event": "事件", "hook": "钩子"}},
 			}},
 		},
 	})
-	_, err := tool.Execute(context.Background(), appendArgs)
-	if err == nil {
-		t.Fatal("expected error when appending volume with non-increasing index")
+	result, err := tool.Execute(context.Background(), appendArgs)
+	if err != nil {
+		t.Fatalf("Execute append_volume: %v", err)
+	}
+	var facts map[string]any
+	if err := json.Unmarshal(result, &facts); err != nil {
+		t.Fatal(err)
+	}
+	if facts["volume"] != float64(2) {
+		t.Fatalf("expected assigned volume 2, got %+v", facts)
+	}
+	volumes, err := s.Outline.LoadLayeredOutline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if volumes[1].Index != 2 || volumes[1].Arcs[0].Index != 1 {
+		t.Fatalf("unexpected indexes: %+v", volumes[1])
 	}
 }
 

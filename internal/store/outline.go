@@ -79,6 +79,7 @@ func (s *OutlineStore) GetChapterOutline(chapter int) (*domain.OutlineEntry, err
 // 调用方不需要、也不应再单独维护 outline.json/outline.md。
 func (s *OutlineStore) SaveLayeredOutline(volumes []domain.VolumeOutline) error {
 	return s.io.WithWriteLock(func() error {
+		assignLayeredIndexes(volumes)
 		return s.saveLayeredViewsUnlocked(volumes)
 	})
 }
@@ -92,6 +93,7 @@ func (s *OutlineStore) LoadLayeredOutline() ([]domain.VolumeOutline, error) {
 		}
 		return nil, err
 	}
+	repairMissingLayeredIndexes(volumes)
 	return volumes, nil
 }
 
@@ -159,6 +161,8 @@ type ArcBoundary struct {
 	NextArc        int
 	NeedsExpansion bool
 	NeedsNewVolume bool // 卷末且当前 layered_outline 没有下一卷
+	nextVolumePos  int
+	nextArcPos     int
 }
 
 // HasNextArc 是否还有后续弧。
@@ -172,7 +176,10 @@ func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 	if err != nil || len(volumes) == 0 {
 		return nil, err
 	}
+	return checkArcBoundary(volumes, chapter), nil
+}
 
+func checkArcBoundary(volumes []domain.VolumeOutline, chapter int) *ArcBoundary {
 	type arcPos struct {
 		volIdx, arcIdx int
 		volume, arc    int
@@ -203,14 +210,16 @@ func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 		}
 	}
 	if cur == nil {
-		return nil, nil
+		return nil
 	}
 
 	b := &ArcBoundary{
-		Volume:       cur.volume,
-		Arc:          cur.arc,
-		StartChapter: cur.arcStart,
-		EndChapter:   cur.arcStart + cur.arcLen - 1,
+		Volume:        cur.volume,
+		Arc:           cur.arc,
+		StartChapter:  cur.arcStart,
+		EndChapter:    cur.arcStart + cur.arcLen - 1,
+		nextVolumePos: -1,
+		nextArcPos:    -1,
 	}
 
 	isLastChInArc := cur.chInArc == cur.arcLen-1
@@ -218,7 +227,7 @@ func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 
 	// Next*/NeedsExpansion/NeedsNewVolume 只在弧末才有意义，否则会让协调者误以为要提前展开下一弧。
 	if !isLastChInArc {
-		return b, nil
+		return b
 	}
 
 	b.IsArcEnd = true
@@ -236,6 +245,8 @@ func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 			b.NextVolume = volumes[vi].Index
 			b.NextArc = volumes[vi].Arcs[ai].Index
 			b.NeedsExpansion = !volumes[vi].Arcs[ai].IsExpanded()
+			b.nextVolumePos = vi
+			b.nextArcPos = ai
 			found = true
 			break
 		}
@@ -248,7 +259,7 @@ func (s *OutlineStore) CheckArcBoundary(chapter int) (*ArcBoundary, error) {
 		b.NeedsNewVolume = true
 	}
 
-	return b, nil
+	return b
 }
 
 // CompletedArcBoundaries 按故事顺序返回已完成的详细弧边界。
@@ -279,8 +290,8 @@ func (s *OutlineStore) CompletedArcBoundaries(lastCompleted int) ([]ArcBoundary,
 	return result, nil
 }
 
-// expandArcUnlocked 内部方法，在 Store.ExpandArc 跨域协调中调用。
-func (s *OutlineStore) expandArcUnlocked(volumeIdx, arcIdx int, expansion domain.ArcExpansion) ([]domain.VolumeOutline, error) {
+// expandArcAtUnlocked 展开故事顺序中的指定弧，不接受模型提供的结构主键。
+func (s *OutlineStore) expandArcAtUnlocked(volumes []domain.VolumeOutline, volumePos, arcPos int, expansion domain.ArcExpansion) ([]domain.VolumeOutline, error) {
 	if strings.TrimSpace(expansion.Title) == "" {
 		return nil, fmt.Errorf("弧标题不能为空")
 	}
@@ -291,46 +302,20 @@ func (s *OutlineStore) expandArcUnlocked(volumeIdx, arcIdx int, expansion domain
 		return nil, fmt.Errorf("展开弧必须至少包含一章")
 	}
 
-	var volumes []domain.VolumeOutline
-	if err := s.io.ReadJSONUnlocked("layered_outline.json", &volumes); err != nil {
-		return nil, fmt.Errorf("load layered_outline: %w", err)
+	if volumePos < 0 || volumePos >= len(volumes) || arcPos < 0 || arcPos >= len(volumes[volumePos].Arcs) {
+		return nil, fmt.Errorf("arc position out of range: volume=%d, arc=%d", volumePos+1, arcPos+1)
 	}
-	found := false
-	for vi := range volumes {
-		if volumes[vi].Index != volumeIdx {
-			continue
+	arc := &volumes[volumePos].Arcs[arcPos]
+	if arc.IsExpanded() {
+		current := domain.ArcExpansion{Title: arc.Title, Goal: arc.Goal, Chapters: arc.Chapters}
+		if !reflect.DeepEqual(current, expansion) {
+			return nil, fmt.Errorf("arc already expanded: volume=%d, arc=%d", volumePos+1, arcPos+1)
 		}
-		for ai := range volumes[vi].Arcs {
-			if volumes[vi].Arcs[ai].Index != arcIdx {
-				continue
-			}
-			if volumes[vi].Arcs[ai].IsExpanded() {
-				current := domain.ArcExpansion{
-					Title:    volumes[vi].Arcs[ai].Title,
-					Goal:     volumes[vi].Arcs[ai].Goal,
-					Chapters: volumes[vi].Arcs[ai].Chapters,
-				}
-				if reflect.DeepEqual(current, expansion) {
-					// 幂等重试仍须重写下方所有派生视图；上次可能只完成了
-					// layered_outline.json，尚未写 flat outline/Markdown。
-					found = true
-					break
-				}
-				return nil, fmt.Errorf("arc already expanded: volume=%d, arc=%d", volumeIdx, arcIdx)
-			}
-			volumes[vi].Arcs[ai].Title = expansion.Title
-			volumes[vi].Arcs[ai].Goal = expansion.Goal
-			volumes[vi].Arcs[ai].Chapters = expansion.Chapters
-			volumes[vi].Arcs[ai].EstimatedChapters = 0
-			found = true
-			break
-		}
-		if found {
-			break
-		}
-	}
-	if !found {
-		return nil, fmt.Errorf("arc not found: volume=%d, arc=%d", volumeIdx, arcIdx)
+	} else {
+		arc.Title = expansion.Title
+		arc.Goal = expansion.Goal
+		arc.Chapters = expansion.Chapters
+		arc.EstimatedChapters = 0
 	}
 	if err := s.saveLayeredViewsUnlocked(volumes); err != nil {
 		return nil, err
@@ -339,31 +324,40 @@ func (s *OutlineStore) expandArcUnlocked(volumeIdx, arcIdx int, expansion domain
 }
 
 // appendVolumeUnlocked 内部方法，在 Store.AppendVolume 跨域协调中调用。
-func (s *OutlineStore) appendVolumeUnlocked(vol domain.VolumeOutline) ([]domain.VolumeOutline, error) {
+func (s *OutlineStore) appendVolumeUnlocked(vol domain.VolumeOutline) ([]domain.VolumeOutline, domain.VolumeOutline, error) {
 	var volumes []domain.VolumeOutline
 	if err := s.io.ReadJSONUnlocked("layered_outline.json", &volumes); err != nil {
-		return nil, fmt.Errorf("load layered_outline: %w", err)
+		return nil, domain.VolumeOutline{}, fmt.Errorf("load layered_outline: %w", err)
 	}
+	repairMissingLayeredIndexes(volumes)
+	nextIndex := 1
+	if len(volumes) > 0 {
+		nextIndex = volumes[len(volumes)-1].Index + 1
+	}
+	numberVolume(&vol, nextIndex)
 	// AppendVolume 的下一步还要更新 Progress。若进程在“大纲已追加、Progress
 	// 未更新”之间中断，恢复会用同一持久化载荷重试；完全相同的末卷应视为幂等，
-	// 让同参数重试继续补齐 Progress，而不是因重复 Index 永久卡死。
-	if len(volumes) == 0 || !reflect.DeepEqual(volumes[len(volumes)-1], vol) {
-		if err := validateAppendVolume(volumes, vol); err != nil {
-			return nil, err
+	// 让同参数重试继续补齐 Progress，而不是重复追加。
+	if len(volumes) > 0 && sameVolumePlan(volumes[len(volumes)-1], vol) {
+		vol = volumes[len(volumes)-1]
+	} else {
+		if err := validateAppendVolume(vol); err != nil {
+			return nil, domain.VolumeOutline{}, err
 		}
 		volumes = append(volumes, vol)
 	}
 	// 即使末卷已存在也重写全部派生视图；上次可能恰好在 layered JSON 落盘后、
 	// flat outline/Markdown 写入前中断。
 	if err := s.saveLayeredViewsUnlocked(volumes); err != nil {
-		return nil, err
+		return nil, domain.VolumeOutline{}, err
 	}
-	return volumes, nil
+	return volumes, vol, nil
 }
 
 // saveLayeredViewsUnlocked 以分层大纲为唯一来源，统一重建其 Markdown 与扁平派生视图。
 // 调用方必须持有 OutlineStore 的写锁。
 func (s *OutlineStore) saveLayeredViewsUnlocked(volumes []domain.VolumeOutline) error {
+	repairMissingLayeredIndexes(volumes)
 	if err := s.io.WriteJSONUnlocked("layered_outline.json", volumes); err != nil {
 		return err
 	}
@@ -456,13 +450,7 @@ func reviseLayeredTail(volumes []domain.VolumeOutline, fromChapter int, replacem
 	return nil
 }
 
-func validateAppendVolume(existing []domain.VolumeOutline, vol domain.VolumeOutline) error {
-	if len(existing) > 0 {
-		maxIdx := existing[len(existing)-1].Index
-		if vol.Index <= maxIdx {
-			return fmt.Errorf("卷 Index %d 必须大于现有最大值 %d", vol.Index, maxIdx)
-		}
-	}
+func validateAppendVolume(vol domain.VolumeOutline) error {
 	if len(vol.Arcs) == 0 {
 		return fmt.Errorf("新卷必须至少包含一个弧")
 	}
@@ -470,6 +458,40 @@ func validateAppendVolume(existing []domain.VolumeOutline, vol domain.VolumeOutl
 		return fmt.Errorf("新卷的首弧必须包含详细章节")
 	}
 	return nil
+}
+
+func assignLayeredIndexes(volumes []domain.VolumeOutline) {
+	for i := range volumes {
+		numberVolume(&volumes[i], i+1)
+	}
+}
+
+// repairMissingLayeredIndexes 兼容旧版本曾把可选 index 漏写为 0 的大纲。
+// 正数标识保持原样，避免改动已有摘要和 checkpoint 的作用域。
+func repairMissingLayeredIndexes(volumes []domain.VolumeOutline) {
+	for vi := range volumes {
+		if volumes[vi].Index <= 0 {
+			volumes[vi].Index = vi + 1
+		}
+		for ai := range volumes[vi].Arcs {
+			if volumes[vi].Arcs[ai].Index <= 0 {
+				volumes[vi].Arcs[ai].Index = ai + 1
+			}
+		}
+	}
+}
+
+func numberVolume(volume *domain.VolumeOutline, index int) {
+	volume.Index = index
+	for i := range volume.Arcs {
+		volume.Arcs[i].Index = i + 1
+	}
+}
+
+func sameVolumePlan(a, b domain.VolumeOutline) bool {
+	numberVolume(&a, 1)
+	numberVolume(&b, 1)
+	return reflect.DeepEqual(a, b)
 }
 
 // SaveCompass 保存终局方向指南针。
@@ -559,7 +581,7 @@ func renderOutline(entries []domain.OutlineEntry) string {
 // ── Writer 大纲反馈池 ──
 //
 // commit_chapter 的 feedback(偏离/建议)持久化于此,architect 下次结构操作
-// (expand_arc / append_volume / update_compass)经 novel_context 消费后清空。
+// (expand_next_arc / append_volume / update_compass)经 novel_context 消费后清空。
 // 事实闭环:工具落盘 → 上下文注入 → 结构操作即消费(docs/engine-arbiter.md 阻断1)。
 
 // ChapterFeedback 一条带章节号的大纲反馈。

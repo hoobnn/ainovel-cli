@@ -260,44 +260,64 @@ func (s *Store) Init() error {
 
 // ── 跨域协调方法 ──
 
-// ExpandArc 将骨架弧校准并展开为详细章节（Outline + Progress 联动）。
-func (s *Store) ExpandArc(volumeIdx, arcIdx int, expansion domain.ArcExpansion) error {
+// ArcPosition 是由分层大纲故事顺序确定的卷弧位置。
+type ArcPosition struct {
+	Volume int
+	Arc    int
+}
+
+// ExpandNextArc 展开当前已完成弧之后的下一弧（Outline + Progress 联动）。
+// 目标由已落盘进度和大纲共同确定，模型只负责创作内容。
+func (s *Store) ExpandNextArc(expansion domain.ArcExpansion) (ArcPosition, error) {
 	s.crossMu.Lock()
 	defer s.crossMu.Unlock()
 
 	s.Outline.io.mu.Lock()
 	defer s.Outline.io.mu.Unlock()
 
-	volumes, err := s.Outline.expandArcUnlocked(volumeIdx, arcIdx, expansion)
-	if err != nil {
-		return err
+	var volumes []domain.VolumeOutline
+	if err := s.Outline.io.ReadJSONUnlocked("layered_outline.json", &volumes); err != nil {
+		return ArcPosition{}, fmt.Errorf("load layered_outline: %w", err)
 	}
+	repairMissingLayeredIndexes(volumes)
 
 	s.Progress.io.mu.Lock()
 	defer s.Progress.io.mu.Unlock()
 
 	p, err := s.Progress.loadUnlocked()
 	if err != nil {
-		return err
+		return ArcPosition{}, err
 	}
 	if p == nil {
-		p = &domain.Progress{}
+		return ArcPosition{}, fmt.Errorf("progress 未初始化: %w", errs.ErrToolPrecondition)
+	}
+	boundary := checkArcBoundary(volumes, p.LatestCompleted())
+	if boundary == nil || !boundary.IsArcEnd || boundary.nextVolumePos < 0 {
+		return ArcPosition{}, fmt.Errorf("当前进度不在弧末，无下一弧可展开: %w", errs.ErrToolPrecondition)
+	}
+	position := ArcPosition{Volume: boundary.NextVolume, Arc: boundary.NextArc}
+	volumes, err = s.Outline.expandArcAtUnlocked(volumes, boundary.nextVolumePos, boundary.nextArcPos, expansion)
+	if err != nil {
+		return ArcPosition{}, err
 	}
 	p.TotalChapters = domain.EstimatedChapterCapacity(volumes)
-	return s.Progress.saveUnlocked(p)
+	if err := s.Progress.saveUnlocked(p); err != nil {
+		return ArcPosition{}, err
+	}
+	return position, nil
 }
 
 // AppendVolume 追加新卷到分层大纲末尾（Outline + Progress 联动）。
-func (s *Store) AppendVolume(vol domain.VolumeOutline) error {
+func (s *Store) AppendVolume(vol domain.VolumeOutline) (domain.VolumeOutline, error) {
 	s.crossMu.Lock()
 	defer s.crossMu.Unlock()
 
 	s.Outline.io.mu.Lock()
 	defer s.Outline.io.mu.Unlock()
 
-	volumes, err := s.Outline.appendVolumeUnlocked(vol)
+	volumes, saved, err := s.Outline.appendVolumeUnlocked(vol)
 	if err != nil {
-		return err
+		return domain.VolumeOutline{}, err
 	}
 
 	s.Progress.io.mu.Lock()
@@ -305,13 +325,16 @@ func (s *Store) AppendVolume(vol domain.VolumeOutline) error {
 
 	p, err := s.Progress.loadUnlocked()
 	if err != nil {
-		return err
+		return domain.VolumeOutline{}, err
 	}
 	if p == nil {
 		p = &domain.Progress{}
 	}
 	p.TotalChapters = domain.EstimatedChapterCapacity(volumes)
-	return s.Progress.saveUnlocked(p)
+	if err := s.Progress.saveUnlocked(p); err != nil {
+		return domain.VolumeOutline{}, err
+	}
+	return saved, nil
 }
 
 // ReviseOutline 从 fromChapter 起替换尚未发生的计划尾段。

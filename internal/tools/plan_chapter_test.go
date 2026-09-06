@@ -56,7 +56,7 @@ func TestPlanChapterRejectsUnexpandedLayeredChapter(t *testing.T) {
 	}
 
 	tool := NewPlanChapterTool(st)
-	if _, err := tool.Execute(context.Background(), planArgs(3)); err == nil || !strings.Contains(err.Error(), "expand_arc") {
+	if _, err := tool.Execute(context.Background(), planArgs(3)); err == nil || !strings.Contains(err.Error(), "expand_next_arc") {
 		t.Fatalf("expected unexpanded chapter rejection, got %v", err)
 	}
 	if p, _ := st.Progress.Load(); p != nil && p.InProgressChapter == 3 {

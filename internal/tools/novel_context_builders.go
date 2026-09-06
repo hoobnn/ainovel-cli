@@ -932,7 +932,7 @@ func (t *ContextTool) buildArchitectFoundation(envelope *architectContextEnvelop
 		reads.require("foundation_status", err)
 	}
 	// Writer 反馈池:commit_chapter 落盘的大纲偏离/建议,规划下一弧/卷时必须参考;
-	// expand_arc / append_volume / update_compass 成功后自动清空(已消费)。
+	// expand_next_arc / append_volume / update_compass 成功后自动清空(已消费)。
 	if fbs, err := t.store.Outline.LoadPendingOutlineFeedback(); err == nil && len(fbs) > 0 {
 		envelope.Foundation["writer_feedback"] = fbs
 	} else {

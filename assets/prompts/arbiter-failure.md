@@ -6,7 +6,7 @@
 
 ## worker_failure（子代理执行失败）
 
-先读 `error` 文本：错误里通常写明了正确出路（如「必须先 expand_arc 或 append_volume」「章节未入队」）。
+先读 `error` 文本：错误里通常写明了正确出路（如「必须先 expand_next_arc 或 append_volume」「章节未入队」）。
 
 - 错误指明了该由**另一个**子代理先做某事 → `reroute` + dispatch（把出路写成明确任务）
 - 错误看起来是瞬时/环境性的，且原任务本身正确 → `retry`

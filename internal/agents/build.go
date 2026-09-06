@@ -127,6 +127,8 @@ func BuildWorkers(
 		tools.NewResolveOutlineFeedbackTool(store),
 		tools.NewAuditFoundationTool(store),
 	}
+	architectLongTools := append([]agentcore.Tool(nil), architectTools...)
+	architectLongTools = append(architectLongTools, tools.NewExpandNextArcTool(store))
 	writerTools := []agentcore.Tool{
 		contextTool,
 		readChapter,
@@ -228,7 +230,7 @@ func BuildWorkers(
 		Description:           "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
 		Model:                 architectModel,
 		SystemPrompt:          bundle.Prompts.ArchitectLong,
-		Tools:                 architectTools,
+		Tools:                 architectLongTools,
 		MaxTurns:              20,
 		MaxRetries:            subagentMaxRetries,
 		ThinkingLevel:         architectThinking,
@@ -353,9 +355,12 @@ func architectLongShouldStopAfterToolResult(toolName string, result json.RawMess
 	if foundationReadyResult(toolName, result) {
 		return true
 	}
+	if toolName == "expand_next_arc" {
+		return true
+	}
 	r := decodeSaveFoundationResult(toolName, result)
 	switch r.Type {
-	case "expand_arc", "complete_book":
+	case "complete_book":
 		return true
 	default:
 		return false

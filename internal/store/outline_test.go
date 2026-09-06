@@ -183,8 +183,20 @@ func TestExpandArcCalibratesUnwrittenPlan(t *testing.T) {
 			{Title: "隔墙回声", CoreEvent: "双方隔空影响彼此选择", Hook: "重逢代价浮现"},
 		},
 	}
-	if err := s.ExpandArc(1, 2, expansion); err != nil {
-		t.Fatalf("ExpandArc: %v", err)
+	p, err := s.Progress.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.CompletedChapters = []int{1}
+	if err := s.Progress.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	position, err := s.ExpandNextArc(expansion)
+	if err != nil {
+		t.Fatalf("ExpandNextArc: %v", err)
+	}
+	if position.Volume != 1 || position.Arc != 2 {
+		t.Fatalf("unexpected position: %+v", position)
 	}
 
 	volumes, err := s.Outline.LoadLayeredOutline()
@@ -213,7 +225,7 @@ func TestExpandArcCalibratesUnwrittenPlan(t *testing.T) {
 		t.Fatalf("expected total chapters 3, got %d", progress.TotalChapters)
 	}
 
-	if err := s.ExpandArc(1, 2, expansion); err != nil {
+	if _, err := s.ExpandNextArc(expansion); err != nil {
 		t.Fatalf("same expansion must be idempotent: %v", err)
 	}
 	// 模拟上次只写完 layered JSON、派生 flat outline 与 Progress 尚未补齐。
@@ -223,7 +235,7 @@ func TestExpandArcCalibratesUnwrittenPlan(t *testing.T) {
 	if err := s.Progress.SetTotalChapters(1); err != nil {
 		t.Fatalf("set stale total: %v", err)
 	}
-	if err := s.ExpandArc(1, 2, expansion); err != nil {
+	if _, err := s.ExpandNextArc(expansion); err != nil {
 		t.Fatalf("idempotent retry should repair derived state: %v", err)
 	}
 	flat, err = s.Outline.LoadOutline()
@@ -236,7 +248,7 @@ func TestExpandArcCalibratesUnwrittenPlan(t *testing.T) {
 	}
 	changed := expansion
 	changed.Goal = "事后改写已展开弧"
-	if err := s.ExpandArc(1, 2, changed); err == nil {
+	if _, err := s.ExpandNextArc(changed); err == nil {
 		t.Fatal("expected a different expansion to reject overwriting the expanded arc")
 	}
 }
@@ -259,27 +271,31 @@ func TestAppendVolumeValidation(t *testing.T) {
 	}
 
 	// 正常追加应成功
-	if err := s.AppendVolume(validVol); err != nil {
+	if _, err := s.AppendVolume(validVol); err != nil {
 		t.Fatalf("AppendVolume valid: %v", err)
 	}
 
-	// Index 不递增 → 失败
-	if err := s.AppendVolume(domain.VolumeOutline{
-		Index: 1, Title: "重复", Theme: "x",
-		Arcs: []domain.ArcOutline{{Index: 1, Title: "弧", Goal: "g", Chapters: []domain.OutlineEntry{{Title: "ch", CoreEvent: "e", Hook: "h"}}}},
-	}); err == nil {
-		t.Fatal("expected error for non-increasing index")
+	// 卷弧序号由系统生成，不信任调用方提供的 Index。
+	saved, err := s.AppendVolume(domain.VolumeOutline{
+		Index: 99, Title: "第三卷", Theme: "x",
+		Arcs: []domain.ArcOutline{{Index: 99, Title: "弧", Goal: "g", Chapters: []domain.OutlineEntry{{Title: "ch", CoreEvent: "e", Hook: "h"}}}},
+	})
+	if err != nil {
+		t.Fatalf("AppendVolume numbered: %v", err)
+	}
+	if saved.Index != 3 || saved.Arcs[0].Index != 1 {
+		t.Fatalf("unexpected system numbering: %+v", saved)
 	}
 
 	// 无弧 → 失败
-	if err := s.AppendVolume(domain.VolumeOutline{Index: 3, Title: "空", Theme: "x"}); err == nil {
+	if _, err := s.AppendVolume(domain.VolumeOutline{Title: "空", Theme: "x"}); err == nil {
 		t.Fatal("expected error for volume with no arcs")
 	}
 
 	// 首弧无章节 → 失败
-	if err := s.AppendVolume(domain.VolumeOutline{
-		Index: 3, Title: "骨架", Theme: "x",
-		Arcs: []domain.ArcOutline{{Index: 1, Title: "弧", Goal: "g", EstimatedChapters: 10}},
+	if _, err := s.AppendVolume(domain.VolumeOutline{
+		Title: "骨架", Theme: "x",
+		Arcs: []domain.ArcOutline{{Title: "弧", Goal: "g", EstimatedChapters: 10}},
 	}); err == nil {
 		t.Fatal("expected error for first arc without chapters")
 	}
@@ -287,7 +303,7 @@ func TestAppendVolumeValidation(t *testing.T) {
 
 // 注：原先用 Final 卷拒绝 append 的语义已下沉到 save_foundation 层（Phase=Complete 拒绝），
 // 见 save_foundation_test.go::TestSaveFoundationAppendVolumeRejectsAfterComplete。
-// store 层只保留结构性校验（Index 递增 / 首弧含章节等）。
+// store 层只保留内容结构校验，机械序号由自身生成。
 
 func TestSaveAndLoadCompass(t *testing.T) {
 	s := NewStore(t.TempDir())

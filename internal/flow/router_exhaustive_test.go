@@ -121,7 +121,7 @@ func classify(t *testing.T, inst *Instruction) expectKind {
 			return expectFoundationFill
 		case contains(inst.Task, "writer_feedback"):
 			return expectOutlineFeedback
-		case contains(inst.Task, "expand_arc"):
+		case contains(inst.Task, "expand_next_arc"):
 			return expectExpandArc
 		case contains(inst.Task, "append_volume"):
 			return expectNewVolume

@@ -93,7 +93,7 @@ func TestDraftChapterRejectsUnexpandedLayeredChapter(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	if _, err := tool.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "expand_arc") {
+	if _, err := tool.Execute(context.Background(), args); err == nil || !strings.Contains(err.Error(), "expand_next_arc") {
 		t.Fatalf("expected unexpanded chapter rejection, got %v", err)
 	}
 	progress, _ := s.Progress.Load()

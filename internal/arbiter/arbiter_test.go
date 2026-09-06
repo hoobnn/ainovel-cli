@@ -262,7 +262,7 @@ func TestDecideInterventionAcceptsTargetChapterHold(t *testing.T) {
 
 func TestFailureDecision_Validate(t *testing.T) {
 	facts := FailureFacts{Kind: "worker_failure", Phase: string(domain.PhaseWriting)}
-	ok := FailureDecision{Action: "reroute", Dispatch: &DispatchOp{Agent: "architect_long", Task: "先 expand_arc"}, Reason: "错误指明出路"}
+	ok := FailureDecision{Action: "reroute", Dispatch: &DispatchOp{Agent: "architect_long", Task: "先 expand_next_arc"}, Reason: "错误指明出路"}
 	if err := ok.ValidateAgainst(facts); err != nil {
 		t.Fatalf("合法 reroute 被拒: %v", err)
 	}
