@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -703,9 +704,7 @@ func TestCommitChapterRewriteRecoveryUsesFrozenDraft(t *testing.T) {
 	}
 }
 
-// TestCommitChapterUpdatesCastLedger 验证：commit_chapter 把本章 characters 累加进 cast_ledger，
-// cast_intros 提供的 brief_role 被采用，且 characters.json 中的核心角色不进入 ledger。
-func TestCommitChapterUpdatesCastLedger(t *testing.T) {
+func TestCommitChapterProjectsCastFromRecords(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)
 	if err := s.Init(); err != nil {
@@ -717,7 +716,7 @@ func TestCommitChapterUpdatesCastLedger(t *testing.T) {
 	if err := s.Progress.UpdatePhase(domain.PhaseWriting); err != nil {
 		t.Fatalf("UpdatePhase: %v", err)
 	}
-	// 设定核心角色档案（这些不应进 cast_ledger）
+	// 设定核心角色档案（这些不应进入配角视图）。
 	if err := s.Characters.Save([]domain.Character{
 		{Name: "林墨", Role: "主角", Tier: "core"},
 		{Name: "李清砚", Role: "导师", Tier: "important"},
@@ -726,6 +725,10 @@ func TestCommitChapterUpdatesCastLedger(t *testing.T) {
 	}
 	if err := s.Drafts.SaveDraft(1, "第一章正文，林墨遇到客栈老板老周与小厮阿云。"); err != nil {
 		t.Fatalf("SaveDraft: %v", err)
+	}
+	// 旧版派生文件即使损坏，也不应参与当前提交或配角视图。
+	if err := os.WriteFile(filepath.Join(dir, "meta", "cast_ledger.json"), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	tool := newTestCommitChapterTool(s)
@@ -743,6 +746,12 @@ func TestCommitChapterUpdatesCastLedger(t *testing.T) {
 	if _, err := tool.Execute(context.Background(), args); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	if legacy, err := os.ReadFile(filepath.Join(dir, "meta", "cast_ledger.json")); err != nil || string(legacy) != "{" {
+		t.Fatalf("commit 不应读写旧版配角名册: content=%q err=%v", legacy, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "meta", "rule_violations.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("commit 不应创建机械违规派生文件: %v", err)
+	}
 	summary, err := s.Summaries.LoadSummary(1)
 	if err != nil {
 		t.Fatal(err)
@@ -751,12 +760,12 @@ func TestCommitChapterUpdatesCastLedger(t *testing.T) {
 		t.Fatalf("committed title = %+v", summary)
 	}
 
-	entries, err := s.Cast.Load()
+	entries, err := s.BuildCast([]int{1})
 	if err != nil {
-		t.Fatalf("Cast.Load: %v", err)
+		t.Fatalf("BuildCast: %v", err)
 	}
 	if len(entries) != 2 {
-		t.Fatalf("expected 2 ledger entries (老周/阿云), got %d: %+v", len(entries), entries)
+		t.Fatalf("expected 2 cast entries (老周/阿云), got %d: %+v", len(entries), entries)
 	}
 	byName := map[string]domain.CastEntry{}
 	for _, e := range entries {
@@ -769,10 +778,10 @@ func TestCommitChapterUpdatesCastLedger(t *testing.T) {
 		t.Errorf("阿云 entry wrong: %+v", e)
 	}
 	if _, ok := byName["林墨"]; ok {
-		t.Errorf("核心角色 林墨 不应进 ledger")
+		t.Errorf("核心角色 林墨 不应进入配角视图")
 	}
 	if _, ok := byName["李清砚"]; ok {
-		t.Errorf("核心角色 李清砚 不应进 ledger")
+		t.Errorf("核心角色 李清砚 不应进入配角视图")
 	}
 }
 

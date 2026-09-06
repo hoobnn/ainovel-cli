@@ -62,6 +62,11 @@ func TestContextToolInjectsStyleStats(t *testing.T) {
 		if err := st.Drafts.SaveFinalChapter(ch, body); err != nil {
 			t.Fatalf("SaveFinalChapter: %v", err)
 		}
+		if _, err := st.ChapterRecords.Accept(ch, domain.ChapterOriginGenerated, body, domain.ChapterFacts{
+			Title: fmt.Sprintf("第%d章", ch), Summary: "摘要", KeyEvents: []string{"事件"},
+		}, domain.StyleDelta{}); err != nil {
+			t.Fatalf("Accept: %v", err)
+		}
 		progress.CompletedChapters = append(progress.CompletedChapters, ch)
 	}
 	if err := st.Progress.Save(progress); err != nil {
@@ -1046,6 +1051,11 @@ func TestContextToolInjectsRewriteBriefForPendingRewriteChapter(t *testing.T) {
 	if err := s.Progress.MarkChapterComplete(2, 3000, "", ""); err != nil {
 		t.Fatalf("MarkChapterComplete: %v", err)
 	}
+	if _, err := s.ChapterRecords.Accept(2, domain.ChapterOriginGenerated, "正文", domain.ChapterFacts{
+		Title: "第二章", Summary: "摘要", KeyEvents: []string{"事件"},
+	}, domain.StyleDelta{}); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
 	if err := s.Progress.SetPendingRewrites([]int{2}, "节奏拖沓，需要压缩前半段"); err != nil {
 		t.Fatalf("SetPendingRewrites: %v", err)
 	}
@@ -1137,6 +1147,11 @@ func TestContextToolLoadsArcReviewAffectingEarlierChapter(t *testing.T) {
 		if err := s.Progress.MarkChapterComplete(chapter, 100, "", ""); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := s.ChapterRecords.Accept(chapter, domain.ChapterOriginGenerated, "正文", domain.ChapterFacts{
+			Title: fmt.Sprintf("第%d章", chapter), Summary: "摘要", KeyEvents: []string{"事件"},
+		}, domain.StyleDelta{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := s.Progress.SetPendingRewrites([]int{3}, "弧评审返工"); err != nil {
 		t.Fatal(err)
@@ -1203,10 +1218,7 @@ func TestContextToolDoesNotInjectUserDirectives(t *testing.T) {
 	}
 }
 
-// TestContextToolInjectsRuleViolations 违规事实管道契约(第五轮评审):
-// commit 落盘的机械违规必须经 novel_context(chapter=N) 真实注入——
-// editor.md §机械检查映射消费的就是这个字段,管道断了 prompt 就成空头支票。
-func TestContextToolInjectsRuleViolations(t *testing.T) {
+func TestContextToolComputesRuleViolationsFromAcceptedContent(t *testing.T) {
 	dir := t.TempDir()
 	st := store.NewStore(dir)
 	if err := st.Init(); err != nil {
@@ -1215,10 +1227,16 @@ func TestContextToolInjectsRuleViolations(t *testing.T) {
 	if err := st.Progress.Save(&domain.Progress{TotalChapters: 3, Phase: domain.PhaseWriting}); err != nil {
 		t.Fatalf("progress: %v", err)
 	}
-	if err := st.World.SaveRuleViolations(2, []rules.Violation{
-		{Rule: "fatigue_words", Target: "不禁", Actual: 9, Severity: rules.SeverityWarning},
-	}); err != nil {
-		t.Fatalf("save violations: %v", err)
+	snap := rules.BuildSnapshot([]rules.Candidate{{
+		Source: "test", Structured: rules.Structured{ForbiddenPhrases: []string{"不禁"}},
+	}})
+	if err := st.UserRules.Save(&snap); err != nil {
+		t.Fatalf("save rules: %v", err)
+	}
+	if _, err := st.ChapterRecords.Accept(2, domain.ChapterOriginGenerated, "他不禁回头。", domain.ChapterFacts{
+		Title: "第二章", Summary: "回头", KeyEvents: []string{"回头"},
+	}, domain.StyleDelta{}); err != nil {
+		t.Fatalf("accept chapter: %v", err)
 	}
 
 	tool := newTestContextTool(st, References{}, "default")
@@ -1236,15 +1254,18 @@ func TestContextToolInjectsRuleViolations(t *testing.T) {
 		t.Fatalf("rule_violations 必须注入章节上下文, got %v", result["rule_violations"])
 	}
 
-	// 无违规章节:字段缺省(editor.md 约定)
-	args3, _ := json.Marshal(map[string]any{"chapter": 3})
-	raw3, err := tool.Execute(context.Background(), args3)
+	// 规则改变后，同一接纳正文应立即按新规则重算，不保留旧结果。
+	updated := rules.BuildSnapshot([]rules.Candidate{{Source: "test"}})
+	if err := st.UserRules.Save(&updated); err != nil {
+		t.Fatalf("update rules: %v", err)
+	}
+	raw3, err := tool.Execute(context.Background(), args)
 	if err != nil {
-		t.Fatalf("Execute ch3: %v", err)
+		t.Fatalf("Execute updated rules: %v", err)
 	}
 	var result3 map[string]any
 	_ = json.Unmarshal(raw3, &result3)
 	if _, has := result3["rule_violations"]; has {
-		t.Fatal("无违规章节不应带 rule_violations 字段")
+		t.Fatal("规则更新后不应残留旧的 rule_violations")
 	}
 }

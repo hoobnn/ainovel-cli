@@ -1,6 +1,7 @@
 package revision
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -48,6 +49,10 @@ func MigrateLegacyBaseline(st *store.Store) error {
 	if err != nil {
 		return err
 	}
+	legacyCast, err := loadLegacyCast(st)
+	if err != nil {
+		return fmt.Errorf("读取配角名册: %w", err)
+	}
 	pending := make(map[int]*domain.ChapterRecord, len(missing))
 	for _, summary := range previous.summaries {
 		if !missing[summary.Chapter] {
@@ -60,7 +65,7 @@ func MigrateLegacyBaseline(st *store.Store) error {
 		pending[summary.Chapter] = &record
 	}
 
-	restoreLegacyFacts(existing, pending, chapters, &previous)
+	restoreLegacyFacts(existing, pending, chapters, legacyCast, &previous)
 	records := slices.Clone(existing)
 	for _, chapter := range chapters {
 		if record := pending[chapter]; record != nil {
@@ -112,9 +117,6 @@ func loadLegacyProjection(st *store.Store, chapters []int, progress *domain.Prog
 	}
 	if result.stateChanges, err = st.World.LoadStateChanges(); err != nil {
 		return result, fmt.Errorf("读取状态变化: %w", err)
-	}
-	if result.cast, err = st.Cast.Load(); err != nil {
-		return result, fmt.Errorf("读取配角名册: %w", err)
 	}
 	style, err := st.World.LoadAuthorRevisionStyle()
 	if err != nil {
@@ -214,7 +216,29 @@ func legacyAcceptedAt(st *store.Store, chapter int) time.Time {
 	return time.Now()
 }
 
-func restoreLegacyFacts(existing []domain.ChapterRecord, pending map[int]*domain.ChapterRecord, chapters []int, previous *projection) {
+type legacyCastEntry struct {
+	Name             string   `json:"name"`
+	Aliases          []string `json:"aliases,omitempty"`
+	BriefRole        string   `json:"brief_role,omitempty"`
+	FirstSeenChapter int      `json:"first_seen_chapter"`
+}
+
+func loadLegacyCast(st *store.Store) ([]legacyCastEntry, error) {
+	data, err := os.ReadFile(filepath.Join(st.Dir(), "meta", "cast_ledger.json"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var entries []legacyCastEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func restoreLegacyFacts(existing []domain.ChapterRecord, pending map[int]*domain.ChapterRecord, chapters []int, legacyCast []legacyCastEntry, previous *projection) {
 	for chapter, record := range pending {
 		record.Facts.HookType = historyAt(previous.hookHistory, chapter)
 		record.Facts.DominantStrand = historyAt(previous.strandHistory, chapter)
@@ -234,7 +258,7 @@ func restoreLegacyFacts(existing []domain.ChapterRecord, pending map[int]*domain
 			record.Facts.RelationshipChanges = append(record.Facts.RelationshipChanges, relation)
 		}
 	}
-	for _, entry := range previous.cast {
+	for _, entry := range legacyCast {
 		record := pending[entry.FirstSeenChapter]
 		if record == nil || entry.BriefRole == "" {
 			continue
@@ -332,7 +356,7 @@ func firstPendingChapterAtOrAfter(chapters []int, pending map[int]*domain.Chapte
 	return 0
 }
 
-func castNameInSummary(entry domain.CastEntry, characters []string) string {
+func castNameInSummary(entry legacyCastEntry, characters []string) string {
 	for _, name := range characters {
 		if name == entry.Name || slices.Contains(entry.Aliases, name) {
 			return name

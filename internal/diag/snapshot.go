@@ -18,7 +18,6 @@ type Snapshot struct {
 	Outline       []domain.OutlineEntry
 	Volumes       []domain.VolumeOutline
 	Characters    []domain.Character
-	CastLedger    []domain.CastEntry
 	WorldRules    []domain.WorldRule
 	Timeline      []domain.TimelineEvent
 	Foreshadow    []domain.ForeshadowEntry
@@ -60,8 +59,6 @@ func Load(s *store.Store) Snapshot {
 	check("volumes", err)
 	snap.Characters, err = s.Characters.Load()
 	check("characters", err)
-	snap.CastLedger, err = s.Cast.Load()
-	check("cast_ledger", err)
 	snap.WorldRules, err = s.World.LoadWorldRules()
 	check("world_rules", err)
 	snap.Timeline, err = s.World.LoadTimeline()

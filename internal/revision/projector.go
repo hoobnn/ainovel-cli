@@ -8,7 +8,6 @@ import (
 
 	"github.com/voocel/ainovel-cli/internal/chapterfacts"
 	"github.com/voocel/ainovel-cli/internal/domain"
-	"github.com/voocel/ainovel-cli/internal/rules"
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
@@ -23,7 +22,6 @@ type projection struct {
 	foreshadow    []domain.ForeshadowEntry
 	relationships []domain.RelationshipEntry
 	stateChanges  []domain.StateChange
-	cast          []domain.CastEntry
 	wordCounts    map[int]int
 	totalWords    int
 	hookHistory   []string
@@ -66,15 +64,10 @@ func (p *Projector) build(records []domain.ChapterRecord) (projection, error) {
 	if err != nil {
 		return projection{}, err
 	}
-	characters, err := p.store.Characters.Load()
-	if err != nil {
-		return projection{}, fmt.Errorf("读取核心角色: %w", err)
-	}
-
 	result := projection{
 		timeline: timeline, foreshadow: ledger, relationships: relationships,
-		stateChanges: changes, cast: projectCast(records, characters),
-		wordCounts: make(map[int]int, len(records)), style: projectStyle(records),
+		stateChanges: changes,
+		wordCounts:   make(map[int]int, len(records)), style: projectStyle(records),
 	}
 	for _, record := range records {
 		facts := record.Facts
@@ -114,16 +107,13 @@ func (p *Projector) Apply(records []domain.ChapterRecord) error {
 	if err := p.store.World.SaveStateChanges(result.stateChanges); err != nil {
 		return fmt.Errorf("重建状态变化: %w", err)
 	}
-	if err := p.store.Cast.Save(result.cast); err != nil {
-		return fmt.Errorf("重建配角名册: %w", err)
-	}
 	if err := p.updateProgress(result); err != nil {
 		return err
 	}
 	if err := p.store.World.SaveAuthorRevisionStyle(result.style); err != nil {
 		return fmt.Errorf("保存用户修订风格: %w", err)
 	}
-	return p.refreshRuleViolations(records)
+	return nil
 }
 
 func projectWorld(records []domain.ChapterRecord) ([]domain.TimelineEvent, []domain.ForeshadowEntry, []domain.RelationshipEntry, []domain.StateChange, error) {
@@ -189,51 +179,6 @@ func projectWorld(records []domain.ChapterRecord) ([]domain.TimelineEvent, []dom
 	return timeline, ledger, relationList, changes, nil
 }
 
-func projectCast(records []domain.ChapterRecord, characters []domain.Character) []domain.CastEntry {
-	core := make(map[string]bool)
-	for _, character := range characters {
-		core[character.Name] = true
-		for _, alias := range character.Aliases {
-			core[alias] = true
-		}
-	}
-	entries := make(map[string]*domain.CastEntry)
-	for _, record := range records {
-		intros := make(map[string]string)
-		for _, intro := range record.Facts.CastIntros {
-			intros[intro.Name] = intro.BriefRole
-		}
-		seen := make(map[string]bool)
-		for _, name := range record.Facts.Characters {
-			if name == "" || core[name] || seen[name] {
-				continue
-			}
-			seen[name] = true
-			entry := entries[name]
-			if entry == nil {
-				entry = &domain.CastEntry{Name: name, BriefRole: intros[name], FirstSeenChapter: record.Chapter}
-				entries[name] = entry
-			} else if entry.BriefRole == "" {
-				entry.BriefRole = intros[name]
-			}
-			entry.LastSeenChapter = record.Chapter
-			entry.AppearanceChapters = append(entry.AppearanceChapters, record.Chapter)
-			entry.AppearanceCount = len(entry.AppearanceChapters)
-		}
-	}
-	out := make([]domain.CastEntry, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, *entry)
-	}
-	slices.SortFunc(out, func(a, b domain.CastEntry) int {
-		if a.FirstSeenChapter != b.FirstSeenChapter {
-			return a.FirstSeenChapter - b.FirstSeenChapter
-		}
-		return strings.Compare(a.Name, b.Name)
-	})
-	return out
-}
-
 func (p *Projector) updateProgress(result projection) error {
 	progress, err := p.store.Progress.Load()
 	if err != nil {
@@ -248,22 +193,6 @@ func (p *Projector) updateProgress(result projection) error {
 	progress.StrandHistory = result.strandHistory
 	if err := p.store.Progress.Save(progress); err != nil {
 		return fmt.Errorf("更新章节进度投影: %w", err)
-	}
-	return nil
-}
-
-func (p *Projector) refreshRuleViolations(records []domain.ChapterRecord) error {
-	structured := rules.SystemDefaults().Structured
-	if snapshot, err := p.store.UserRules.Load(); err != nil {
-		return fmt.Errorf("读取用户规则: %w", err)
-	} else if snapshot != nil {
-		structured = snapshot.Structured
-	}
-	for _, record := range records {
-		violations := append(rules.Lint(record.Content), rules.Check(record.Content, structured)...)
-		if err := p.store.World.SaveRuleViolations(record.Chapter, violations); err != nil {
-			return fmt.Errorf("更新第 %d 章机械检查: %w", record.Chapter, err)
-		}
 	}
 	return nil
 }

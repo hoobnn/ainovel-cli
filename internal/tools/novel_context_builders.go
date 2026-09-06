@@ -21,6 +21,7 @@ type contextBuildState struct {
 	relationships   []domain.RelationshipEntry
 	allStateChanges []domain.StateChange
 	styleRules      *domain.WritingStyleRules
+	cast            []domain.CastEntry
 }
 
 type chapterContextEnvelope struct {
@@ -158,7 +159,7 @@ func (t *ContextTool) buildProgressStatus(result map[string]any, reads *contextR
 //
 // 注入策略：只给 LLM 看 structured + preferences——这两项才是创作时需要遵循的偏好。
 // sources / conflicts 是诊断信息（用户冲突排查），不进 LLM；由 CLI 启动诊断面板按需展示。
-func (t *ContextTool) buildUserRules(result map[string]any, reads *contextReads) {
+func (t *ContextTool) buildUserRules(result map[string]any, reads *contextReads) *rules.Snapshot {
 	snap, err := t.store.UserRules.Load()
 	if err != nil {
 		reads.require("user_rules", err)
@@ -174,6 +175,23 @@ func (t *ContextTool) buildUserRules(result map[string]any, reads *contextReads)
 		result["working_memory"] = working
 	}
 	working["user_rules"] = snap.Payload()
+	return snap
+}
+
+func (t *ContextTool) buildRuleViolations(result map[string]any, chapter int, snap *rules.Snapshot, reads *contextReads) {
+	record, err := t.store.ChapterRecords.Load(chapter)
+	if err != nil {
+		reads.require("chapter_record", err)
+		return
+	}
+	if record == nil {
+		return
+	}
+	violations := rules.Lint(record.Content)
+	violations = append(violations, rules.Check(record.Content, snap.Structured)...)
+	if len(violations) > 0 {
+		result["rule_violations"] = violations
+	}
 }
 
 func (t *ContextTool) buildSimulationProfile(result map[string]any, sectionKey string, reads *contextReads) {
@@ -234,6 +252,10 @@ func (t *ContextTool) prepareChapterContext(chapter int, envelope *chapterContex
 	reads.require("run_meta", err)
 	state.progress = progress
 	state.runMeta = runMeta
+	if progress != nil && len(progress.CompletedChapters) > 0 {
+		state.cast, err = t.store.BuildCast(progress.CompletedChapters)
+		reads.require("supporting_cast", err)
+	}
 
 	if runMeta != nil && runMeta.PlanningTier != "" {
 		envelope.Episodic["planning_tier"] = runMeta.PlanningTier
@@ -410,7 +432,7 @@ func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state co
 	stats, err := t.styleStats.Snapshot(
 		state.progress.CompletedChapters,
 		titles,
-		t.styleStopwords(reads),
+		t.styleStopwords(state.cast, reads),
 	)
 	if err != nil {
 		reads.warn("style_stats", err)
@@ -423,7 +445,7 @@ func (t *ContextTool) buildStyleStats(envelope *chapterContextEnvelope, state co
 }
 
 // styleStopwords 收集角色名与别名供短语挖掘过滤——出场人名天然高频，不是文风问题。
-func (t *ContextTool) styleStopwords(reads *contextReads) []string {
+func (t *ContextTool) styleStopwords(cast []domain.CastEntry, reads *contextReads) []string {
 	var words []string
 	if chars, err := t.store.Characters.Load(); err == nil {
 		for _, c := range chars {
@@ -433,13 +455,8 @@ func (t *ContextTool) styleStopwords(reads *contextReads) []string {
 	} else {
 		reads.warn("style_stats.characters", err)
 	}
-	if cast, err := t.store.Cast.RecentActive(50); err == nil {
-		for _, e := range cast {
-			words = append(words, e.Name)
-			words = append(words, e.Aliases...)
-		}
-	} else {
-		reads.warn("style_stats.cast", err)
+	for _, entry := range domain.RecentCast(cast, 50) {
+		words = append(words, entry.Name)
 	}
 	return words
 }
@@ -555,9 +572,9 @@ func (t *ContextTool) buildChapterEpisodicMemory(envelope *chapterContextEnvelop
 		envelope.Episodic["foreshadow_ledger"] = state.foreshadow
 	}
 
-	// 配角名册：召回最近活跃的次要角色，让 Writer 在引入旧角色时能保持口吻/定位一致
+	// 召回最近活跃的次要角色，让 Writer 在引入旧角色时能保持口吻/定位一致。
 	// 不召回所有条目（长篇会膨胀），只给最近活跃的前 N 个，按 LastSeenChapter 倒序
-	if recentCast, err := t.store.Cast.RecentActive(15); err == nil && len(recentCast) > 0 {
+	if recentCast := domain.RecentCast(state.cast, 15); len(recentCast) > 0 {
 		simplified := make([]map[string]any, 0, len(recentCast))
 		for _, e := range recentCast {
 			item := map[string]any{
@@ -569,14 +586,9 @@ func (t *ContextTool) buildChapterEpisodicMemory(envelope *chapterContextEnvelop
 			if e.BriefRole != "" {
 				item["brief_role"] = e.BriefRole
 			}
-			if len(e.Aliases) > 0 {
-				item["aliases"] = e.Aliases
-			}
 			simplified = append(simplified, item)
 		}
 		envelope.Episodic["recent_cast"] = simplified
-	} else if err != nil {
-		reads.warn("recent_cast", err)
 	}
 
 	if state.progress != nil && state.progress.TotalChapters > 30 && state.currentEntry != nil {

@@ -55,7 +55,7 @@ UI、诊断、事件日志都是从事件流 / 只读工件投影出来的被动
 - **Checkpoint** — step 级推进记录（plan / draft / commit / review / arc_summary）
 - **Artifact** — 章节正文、大纲、角色、摘要等产物
 
-不引入 WorkflowInstance / TaskInstance / Command 等抽象。附属事实（大纲反馈池、机械违规记录、裁定审计）同样是扁平 jsonl，各有唯一生产者与消费者。
+不引入 WorkflowInstance / TaskInstance / Command 等抽象。需要持久化的附属事实（大纲反馈池、裁定审计）同样是扁平 jsonl，各有唯一生产者与消费者；可由章节记录重建的视图不重复落盘。
 
 ### 2.5 四铁律
 
@@ -165,7 +165,7 @@ Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `worl
 - **Decisions**（`meta/decisions.jsonl`）：每次 Arbiter 裁定的审计记录（facts+input+decision），可离线重放；**不是恢复数据源**（恢复只依赖 Progress/Checkpoint/RunMeta）。
 - **增长型世界事实**：时间线与角色状态变化分别以 `timeline.jsonl`、`meta/state_changes.jsonl` 追加；进程内维护去重索引，正常提交只写本章增量。旧版 JSON 数组在下一次追加时按“先原子写新日志、后删除旧文件”的幂等协议迁移，`timeline.md` 是可重建的人类可读投影。
 - **大纲反馈池**（`meta/outline_feedback.jsonl`）：writer 的普通反馈在下一次结构操作中消费；外部正文修订若影响剧情，则在继续写作前优先交给 architect，处理后清空。
-- **机械违规记录**（`meta/rule_violations.jsonl`）：commit 时按 user_rules 检查的结果，editor 评审经 `novel_context(chapter=N)` 消费；best-effort 质量元数据，非与提交同级强一致。
+- **机械违规视图**：`novel_context(chapter=N)` 按章节接纳正文与当前 `user_rules` 即时计算，供 editor 消费；不维护可能与正文或规则失同步的独立工件。
 
 ### 4.4 分层大纲与完本收敛（收官卷）
 

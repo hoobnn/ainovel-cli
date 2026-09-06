@@ -303,18 +303,6 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 			}
 		}
 
-		// 4b. 累加配角名册：本章出场的非核心角色进 cast_ledger，供 novel_context 召回。
-		// 失败时只 warn 不阻断 commit——名册是次要数据，可通过下一章 commit 自愈。
-		if len(a.Characters) > 0 {
-			coreNames, err := loadCoreCharacterNameSet(t.store)
-			if err != nil {
-				return nil, fmt.Errorf("load core characters for cast ledger: %w: %w", errs.ErrStoreRead, err)
-			}
-			if err := t.store.Cast.MergeAppearances(a.Chapter, a.Characters, a.CastIntros, coreNames); err != nil {
-				slog.Warn("配角名册累加失败，跳过", "module", "commit", "chapter", a.Chapter, "err", err)
-			}
-		}
-
 		pending.Stage = domain.CommitStageStateApplied
 		pending.UpdatedAt = time.Now().Format(time.RFC3339)
 		if err := t.store.Signals.SavePendingCommit(pending); err != nil {
@@ -446,11 +434,6 @@ func (t *CommitChapterTool) Execute(_ context.Context, args json.RawMessage) (js
 		return nil, fmt.Errorf("clear pending commit: %w: %w", errs.ErrStoreWrite, err)
 	}
 
-	// 持久化违规事实:editor 评审经 novel_context 消费(返回值只是镜像——
-	// writer 在 commit 后立即硬停,返回值无人可读)。best-effort。
-	if err := t.store.World.SaveRuleViolations(a.Chapter, violations); err != nil {
-		slog.Warn("机械违规落盘失败", "module", "tools", "chapter", a.Chapter, "err", err)
-	}
 	t.refreshStyleStats(a.Chapter, content)
 	return output, nil
 }
@@ -708,7 +691,7 @@ func (t *CommitChapterTool) executeRewriteCommit(a commitArgs, progress *domain.
 		}
 	}
 
-	// 同主路径：rewrite/polish 也做机械检查并持久化(重写后落新记录,旧违规视为已清)
+	// 同主路径：rewrite/polish 也返回基于当前正文的机械检查结果。
 	violations := t.checkRules(content)
 	output, err := json.Marshal(map[string]any{
 		"chapter": chapter, "rewritten": true, "mode": mode, "word_count": wordCount,
@@ -741,9 +724,6 @@ func (t *CommitChapterTool) executeRewriteCommit(a commitArgs, progress *domain.
 		return nil, fmt.Errorf("rewrite: clear pending commit: %w: %w", errs.ErrStoreWrite, err)
 	}
 
-	if err := t.store.World.SaveRuleViolations(chapter, violations); err != nil {
-		slog.Warn("机械违规落盘失败", "module", "tools", "chapter", chapter, "err", err)
-	}
 	t.refreshStyleStats(chapter, content)
 	return output, nil
 }
@@ -851,31 +831,6 @@ func (t *CommitChapterTool) buildSkipResult(chapter int, progress *domain.Progre
 	}
 
 	return json.Marshal(result)
-}
-
-// loadCoreCharacterNameSet 加载 characters.json 中已有的角色名集合（含别名）。
-// 用作 cast_ledger 的"已知核心"过滤集——核心角色不进次要名册。
-// 加载失败时返回 nil（merge 时所有 characters 都进 ledger，可接受）。
-func loadCoreCharacterNameSet(s *store.Store) (map[string]bool, error) {
-	chars, err := s.Characters.Load()
-	if err != nil {
-		return nil, err
-	}
-	if len(chars) == 0 {
-		return nil, nil
-	}
-	set := make(map[string]bool, len(chars)*2)
-	for _, c := range chars {
-		if c.Name != "" {
-			set[c.Name] = true
-		}
-		for _, alias := range c.Aliases {
-			if alias != "" {
-				set[alias] = true
-			}
-		}
-	}
-	return set, nil
 }
 
 // applyCompletion 判断本次 commit 是否使全书完结，若是则 MarkComplete 并返回 true。

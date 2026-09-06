@@ -2,6 +2,7 @@ package revision
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -176,7 +177,7 @@ func TestMigrateLegacyBaselineReconstructsWorldProjection(t *testing.T) {
 	if err != nil || len(ledger) != 1 || ledger[0].Status != "advanced" {
 		t.Fatalf("foreshadow = %+v, err = %v", ledger, err)
 	}
-	cast, err := st.Cast.Load()
+	cast, err := st.BuildCast([]int{1, 2})
 	if err != nil || len(cast) != 1 || cast[0].BriefRole != "客栈掌柜" {
 		t.Fatalf("cast = %+v, err = %v", cast, err)
 	}
@@ -189,9 +190,9 @@ func TestMigrateLegacyBaselineAllowsStaleCastAfterRewrite(t *testing.T) {
 		CastIntros: []domain.CastIntro{{Name: "旧配角", BriefRole: "旧友"}},
 	}
 	saveLegacyChapter(t, st, 1, "旧正文", "旧正文", oldFacts)
-	cast, err := st.Cast.Load()
-	if err != nil || len(cast) != 1 || cast[0].Name != "旧配角" {
-		t.Fatalf("stale cast precondition failed: cast=%+v err=%v", cast, err)
+	legacyCast, err := loadLegacyCast(st)
+	if err != nil || len(legacyCast) != 1 || legacyCast[0].Name != "旧配角" {
+		t.Fatalf("stale cast precondition failed: cast=%+v err=%v", legacyCast, err)
 	}
 
 	newFacts := domain.ChapterFacts{
@@ -223,7 +224,7 @@ func TestMigrateLegacyBaselineAllowsStaleCastAfterRewrite(t *testing.T) {
 	if err := NewProjector(st).Apply(records); err != nil {
 		t.Fatal(err)
 	}
-	cast, err = st.Cast.Load()
+	cast, err := st.BuildCast([]int{1})
 	if err != nil || len(cast) != 1 || cast[0].Name != "新配角" {
 		t.Fatalf("cast = %+v, err = %v", cast, err)
 	}
@@ -648,27 +649,6 @@ func TestServiceResumesPartiallyWrittenPreparedBatch(t *testing.T) {
 	}
 }
 
-func TestProjectorFillsCastRoleFromLaterChapter(t *testing.T) {
-	st := newRevisionTestStore(t, 2)
-	now := time.Now()
-	records := []domain.ChapterRecord{
-		testRecord(1, "正文一", domain.ChapterFacts{
-			Title: "第一章", Summary: "初见店主", Characters: []string{"店主"}, KeyEvents: []string{"初见"},
-		}, domain.StyleDelta{}, now),
-		testRecord(2, "正文二", domain.ChapterFacts{
-			Title: "第二章", Summary: "确认身份", Characters: []string{"店主"}, KeyEvents: []string{"确认身份"},
-			CastIntros: []domain.CastIntro{{Name: "店主", BriefRole: "客栈店主"}},
-		}, domain.StyleDelta{}, now.Add(time.Minute)),
-	}
-	if err := NewProjector(st).Apply(records); err != nil {
-		t.Fatal(err)
-	}
-	cast, err := st.Cast.Load()
-	if err != nil || len(cast) != 1 || cast[0].BriefRole != "客栈店主" {
-		t.Fatalf("后续角色简介未补全: cast=%+v err=%v", cast, err)
-	}
-}
-
 func TestServiceRejectsAndClearsStalePreparedAnalysis(t *testing.T) {
 	st := newRevisionTestStore(t, 1)
 	facts := domain.ChapterFacts{Title: "第一章", Summary: "摘要", KeyEvents: []string{"事件"}}
@@ -826,7 +806,35 @@ func saveLegacyChapter(t *testing.T, st *store.Store, chapter int, draft, final 
 			core[alias] = true
 		}
 	}
-	if err := st.Cast.MergeAppearances(chapter, facts.Characters, facts.CastIntros, core); err != nil {
+	entries, err := loadLegacyCast(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intros := make(map[string]string, len(facts.CastIntros))
+	for _, intro := range facts.CastIntros {
+		intros[intro.Name] = intro.BriefRole
+	}
+	for _, name := range facts.Characters {
+		if core[name] {
+			continue
+		}
+		index := slices.IndexFunc(entries, func(entry legacyCastEntry) bool {
+			return entry.Name == name || slices.Contains(entry.Aliases, name)
+		})
+		if index < 0 {
+			entries = append(entries, legacyCastEntry{Name: name, FirstSeenChapter: chapter})
+			index = len(entries) - 1
+		}
+		entry := &entries[index]
+		if entry.BriefRole == "" {
+			entry.BriefRole = intros[name]
+		}
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(st.Dir(), "meta", "cast_ledger.json"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Progress.StartChapter(chapter); err != nil {

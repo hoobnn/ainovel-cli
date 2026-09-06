@@ -1286,9 +1286,13 @@ func (h *Host) fillDetails(snap *UISnapshot, progress *domain.Progress) {
 			snap.Characters = append(snap.Characters, label)
 		}
 	}
-	if ledger, _ := h.store.Cast.Load(); len(ledger) > 0 {
-		snap.SupportingCount = len(ledger)
-		recent, _ := h.store.Cast.RecentActive(5)
+	if progress != nil && len(progress.CompletedChapters) > 0 {
+		cast, err := h.store.BuildCast(progress.CompletedChapters)
+		if err != nil {
+			slog.Warn("配角视图投影失败", "module", "host.snapshot", "err", err)
+		}
+		snap.SupportingCount = len(cast)
+		recent := domain.RecentCast(cast, 5)
 		for _, e := range recent {
 			label := e.Name
 			if e.BriefRole != "" {

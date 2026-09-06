@@ -142,11 +142,6 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		state := t.prepareChapterContext(a.Chapter, &seed, reads)
 		seed.apply(result)
 		t.buildChapterContext(result, state, reads)
-		// 该章的机械违规事实(commit 时按 user_rules 检查并落盘):
-		// editor 评审据此映射进七维(editor.md §机械检查映射);writer 返工时自查。
-		if violations := t.store.World.LoadRuleViolations(a.Chapter); len(violations) > 0 {
-			result["rule_violations"] = violations
-		}
 		// episodic 是已写入正文的备忘，不是待写素材。
 		if epi, ok := result["episodic_memory"].(map[string]any); ok && len(epi) > 0 {
 			epi["_usage"] = "本容器为已写入正文的事实备忘（供一致性与衔接对照）；在新章正文中原样复述这些内容属于重复缺陷"
@@ -166,7 +161,10 @@ func (t *ContextTool) Execute(_ context.Context, args json.RawMessage) (json.Raw
 		t.buildSimulationProfile(result, "planning_memory", reads)
 	}
 
-	t.buildUserRules(result, reads)
+	userRules := t.buildUserRules(result, reads)
+	if a.Chapter > 0 {
+		t.buildRuleViolations(result, a.Chapter, userRules, reads)
+	}
 
 	if reads.err != nil {
 		return nil, reads.err
