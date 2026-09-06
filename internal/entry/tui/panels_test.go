@@ -54,6 +54,19 @@ func TestRenderErrorEventKeepsOneLineSummary(t *testing.T) {
 	}
 }
 
+func TestRenderRunningModelShowsStateAndElapsed(t *testing.T) {
+	out := ansi.Strip(renderEventLine(host.Event{
+		ID:       "model-1",
+		Time:     time.Now().Add(-65 * time.Second),
+		Category: "MODEL",
+		Summary:  "思考中",
+		Depth:    1,
+	}, 60, 0))
+	if !strings.Contains(out, "思考中") || !strings.Contains(out, "(1m5s)") {
+		t.Fatalf("进行中的模型响应应显示状态与实时耗时，got %q", out)
+	}
+}
+
 // TestRenderStatusBar 守护底部状态栏的信息契约：模型身份（窗口+思考）、会话令牌、
 // 花费/预算、书目录都必须在（样式剥离后按纯文本断言）。
 func TestRenderStatusBar(t *testing.T) {

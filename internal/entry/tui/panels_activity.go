@@ -26,7 +26,7 @@ func renderEventContent(events []host.Event, width, spinnerFrame int) string {
 }
 
 // 进行中的调用类事件使用的 spinner 帧（bubbles.Spinner.Dot，独立于顶栏 MiniDot）。
-var eventRunningFrames = toolSpinnerFrames
+var eventRunningFrames = eventSpinnerFrames
 
 func runningSpinner(frame int) string {
 	return eventRunningFrames[frame%len(eventRunningFrames)]
@@ -103,6 +103,21 @@ func renderEventLine(ev host.Event, width, spinnerFrame int) string {
 			line += durStr
 		}
 		return line
+
+	case ev.Category == "MODEL":
+		var icon, sum string
+		if running {
+			icon = lipgloss.NewStyle().Foreground(colorContext).Bold(true).Render(runningSpinner(spinnerFrame))
+			sum = lipgloss.NewStyle().Foreground(colorContext).Bold(true).Render(truncate(ev.Summary, maxSumW))
+			durStr = renderEventDuration(time.Since(ev.Time))
+		} else if ev.Failed {
+			icon = lipgloss.NewStyle().Foreground(colorError).Render("✕")
+			sum = lipgloss.NewStyle().Foreground(colorError).Render(truncate(ev.Summary, maxSumW))
+		} else {
+			icon = lipgloss.NewStyle().Foreground(colorDim).Render("├")
+			sum = lipgloss.NewStyle().Foreground(colorContext).Render(truncate(ev.Summary, maxSumW))
+		}
+		return tsStr + " " + indent + icon + " " + sum + durStr
 
 	case ev.Category == "ERROR":
 		icon := lipgloss.NewStyle().Foreground(colorError).Bold(true).Render("✕")

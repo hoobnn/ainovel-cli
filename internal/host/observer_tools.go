@@ -22,25 +22,10 @@ func (o *observer) handleToolUpdate(ev agentcore.Event) {
 		}
 	case agentcore.ProgressToolStart:
 		// Worker 内部的工具调用（如 writer → draft_chapter）。
-		// 注意：TOOL 行可能已经在流式识别阶段被 handleSubagentDelta 提前发出。
-		// 此处：若已发 → 只更新 summary（args 此时完整，能显示 "tool(第N章)"）；否则正常发。
 		if ev.Progress.Agent == "" || ev.Progress.Tool == "" {
 			break
 		}
 		toolName := displayToolName(ev.Progress.Tool, ev.Progress.Args)
-		if _, ok := o.toolStarts[ev.Progress.Agent]; ok {
-			o.updateToolCallSummary(ev.Progress.Agent, ev.Progress.Tool, toolName)
-			o.updateAgent(ev.Progress.Agent, func(a *agentState) {
-				a.state = "working"
-				a.tool = ev.Progress.Tool
-				a.summary = fmt.Sprintf("%s → %s", ev.Progress.Agent, toolName)
-			})
-			break
-		}
-		// 未提前发过 → 正常流程
-		// （非流式 tool args 的模型不会触发 ensureSubagentToolStarted，
-		// fallback header 必须在这条路径上补一次，否则 read_chapter 这类
-		// 无 extractor 的工具流式面板上就没有 ✻ 头部，紧贴前面思考一段。）
 		id := nextEventID()
 		o.toolStarts[ev.Progress.Agent] = &activeCall{id: id, start: time.Now(), summary: toolName, depth: 1}
 		o.emitAndLog(Event{
@@ -191,101 +176,6 @@ func dispatchDetail(task, reason string) string {
 		parts = append(parts, "完整任务:\n"+task)
 	}
 	return strings.Join(parts, "\n")
-}
-
-func (o *observer) updateToolCallSummary(agent, tool, summary string) {
-	if agent == "" || summary == "" {
-		return
-	}
-	call, ok := o.toolStarts[agent]
-	if !ok || call.summary == summary {
-		return
-	}
-	call.summary = summary
-	o.emitEv(Event{
-		ID:       call.id,
-		Time:     call.start,
-		Category: "TOOL",
-		Agent:    agent,
-		Summary:  summary,
-		Level:    "info",
-		Depth:    call.depth,
-	})
-	o.updateAgent(agent, func(a *agentState) {
-		a.state = "working"
-		a.tool = tool
-		a.summary = fmt.Sprintf("%s → %s", agent, summary)
-	})
-}
-
-func (o *observer) updateToolCallSummaryFromDelta(agent, tool, delta string) {
-	key := streamArgKey(agent, tool)
-	prefix := o.streamArgPrefixes[key] + delta
-	if len(prefix) > 512 {
-		prefix = prefix[:512]
-	}
-	o.streamArgPrefixes[key] = prefix
-
-	summary := streamedToolLabel(tool, prefix)
-	if summary == "" {
-		return
-	}
-	if o.streamArgLabels[key] == summary {
-		return
-	}
-	o.streamArgLabels[key] = summary
-	o.updateToolCallSummary(agent, tool, summary)
-}
-
-func streamArgKey(agent, tool string) string {
-	return agent + "\x00" + tool
-}
-
-func streamedToolLabel(tool, delta string) string {
-	if tool != "save_foundation" || delta == "" {
-		return ""
-	}
-	typ := firstJSONStringField(delta, "type")
-	if typ == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s[%s]", tool, typ)
-}
-
-func firstJSONStringField(raw, field string) string {
-	needle := `"` + field + `"`
-	idx := strings.Index(raw, needle)
-	if idx < 0 {
-		return ""
-	}
-	rest := raw[idx+len(needle):]
-	colon := strings.IndexByte(rest, ':')
-	if colon < 0 {
-		return ""
-	}
-	rest = strings.TrimLeft(rest[colon+1:], " \t\r\n")
-	if len(rest) == 0 || rest[0] != '"' {
-		return ""
-	}
-	var value strings.Builder
-	escape := false
-	for i := 1; i < len(rest); i++ {
-		c := rest[i]
-		if escape {
-			value.WriteByte(c)
-			escape = false
-			continue
-		}
-		switch c {
-		case '\\':
-			escape = true
-		case '"':
-			return value.String()
-		default:
-			value.WriteByte(c)
-		}
-	}
-	return ""
 }
 
 func (o *observer) emitCallFinish(call *activeCall, category, agentName string, callErr error) {

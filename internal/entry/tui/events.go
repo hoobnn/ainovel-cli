@@ -52,15 +52,15 @@ type (
 		reply host.CoCreateReply
 		err   error
 	}
-	steerResultMsg     struct{ err error }
-	continueResultMsg  struct{ err error }
-	spinnerTickMsg     time.Time
-	toolSpinnerTickMsg time.Time // 事件流工具 spinner 独立 tick（更快、独立于顶栏/星星）
-	streamDeltaMsg     string    // 流式 token 增量
-	streamClearMsg     struct{}  // 清空流式缓冲（新消息开始）
-	streamFlushTickMsg struct{}  // 流式刷新节流（仅有待刷数据时调度）
-	quitResetMsg       struct{}  // 双次 Ctrl+C 超时重置
-	updateCheckMsg     struct {
+	steerResultMsg      struct{ err error }
+	continueResultMsg   struct{ err error }
+	spinnerTickMsg      time.Time
+	eventSpinnerTickMsg time.Time // 事件流进行中事件的 spinner tick（更快、独立于顶栏/星星）
+	streamDeltaMsg      string    // 流式 token 增量
+	streamClearMsg      struct{}  // 清空流式缓冲（新消息开始）
+	streamFlushTickMsg  struct{}  // 流式刷新节流（仅有待刷数据时调度）
+	quitResetMsg        struct{}  // 双次 Ctrl+C 超时重置
+	updateCheckMsg      struct {
 		result *buildversion.CheckResult
 		err    error
 	}
@@ -319,10 +319,10 @@ func tickSpinner() tea.Cmd {
 	})
 }
 
-// tickToolSpinner 驱动事件流"进行中"行的 spinner。独立于 tickSpinner，节奏更快（150ms）。
-func tickToolSpinner() tea.Cmd {
+// tickEventSpinner 驱动事件流"进行中"行的 spinner。独立于 tickSpinner，节奏更快（150ms）。
+func tickEventSpinner() tea.Cmd {
 	return tea.Tick(150*time.Millisecond, func(t time.Time) tea.Msg {
-		return toolSpinnerTickMsg(t)
+		return eventSpinnerTickMsg(t)
 	})
 }
 

@@ -47,7 +47,7 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 // 事件流"进行中"行专用的 spinner 帧序列（bubbles.Spinner.Dot）。
 // 7 个点 + 1 个缺口沿 3×3 格子顺时针旋转，视觉上像完整的加载圆圈。
 // 用独立帧索引 + 更快 tick，不影响顶栏和星星动画的节奏。
-var toolSpinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+var eventSpinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
 
 // Model 是 TUI 的顶层状态。
 type Model struct {
@@ -99,8 +99,8 @@ type Model struct {
 	reportSeq          int
 	err                error
 	spinnerIdx         int
-	toolSpinnerIdx     int  // 事件流进行中行的独立帧索引（150ms tick，不影响顶栏/星星）
-	toolTicking        bool // 已启动工具动画 timer；无运行事件时自动停止
+	eventSpinnerIdx    int  // 事件流进行中行的独立帧索引（150ms tick，不影响顶栏/星星）
+	eventSpinnerActive bool // 已启动事件动画 timer；无运行事件时自动停止
 	cursorIdx          int  // 流式光标帧索引（随主动画推进）
 	streamRound        int  // 流式输出轮次计数
 	quitPending        bool // 双次 Ctrl+C 退出确认
@@ -221,7 +221,7 @@ func (m *Model) paneHighlighted(pane focusPane) bool {
 }
 
 // hasRunningEvent 是否存在未完成（spinner 仍在转）的调用类事件。
-// toolSpinnerTick 用此判断是否值得重渲：没有 running 事件时 spinner 帧不影响输出，
+// tickEventSpinner 用此判断是否值得重渲：没有 running 事件时 spinner 帧不影响输出，
 // 整个 refreshEventViewport 是确定的无效工作。
 func (m *Model) hasRunningEvent() bool {
 	for i := range m.events {
@@ -246,7 +246,7 @@ func (m *Model) flushStreamIfDirty() bool {
 // refreshEventViewport 重新渲染事件流内容并设置 viewport。
 func (m *Model) refreshEventViewport() {
 	centerW := m.eventFlowWidth()
-	content := renderEventContent(m.events, centerW, m.toolSpinnerIdx)
+	content := renderEventContent(m.events, centerW, m.eventSpinnerIdx)
 	snap := m.snapshot
 	if m.starting {
 		snap.IsRunning = true

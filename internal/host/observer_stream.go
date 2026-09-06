@@ -1,8 +1,6 @@
 package host
 
 import (
-	"time"
-
 	"github.com/voocel/agentcore"
 	"github.com/voocel/ainovel-cli/internal/utils"
 )
@@ -12,18 +10,14 @@ import (
 // - DeltaToolCall 只对已知的长内容工具（如 draft_chapter.content）抽取字段流出；其他工具的参数 JSON 全部丢弃
 func (o *observer) handleSubagentDelta(p *agentcore.ProgressPayload) {
 	if p.DeltaKind != agentcore.DeltaToolCall {
+		o.updateModelState(p.Agent, "生成回复")
 		o.emitStreamDelta(p.Delta, false)
 		return
 	}
 	if p.Tool == "" {
 		return // 工具名未就绪，下一个 delta 再试
 	}
-
-	// 流式识别到工具名时提前发 TOOL 进行中事件，让 spinner 覆盖整段 LLM 生成期间
-	// （否则 draft_chapter 这类工具的"进行中"只在真实 Execute 的几十毫秒里显示）。
-	// 真正的 ProgressToolStart 到来时识别到 toolStarts 已有记录，只会补齐 summary。
-	o.ensureSubagentToolStarted(p.Agent, p.Tool)
-	o.updateToolCallSummaryFromDelta(p.Agent, p.Tool, p.Delta)
+	o.updateModelState(p.Agent, "生成 "+p.Tool)
 
 	cur, ok := o.streamExtractors[p.Agent]
 	// 同工具调用 args 已闭合（顶层 } 命中）后，仍可能收到 trailing delta：
@@ -76,53 +70,9 @@ func (o *observer) emitStreamDelta(delta string, thinking bool) {
 	o.streamLastByte = delta[len(delta)-1]
 }
 
-// ensureSubagentToolStarted 在流式识别到 tool_call 首次出现时，提前为该 agent
-// 登记一次进行中的 TOOL 调用，使事件流的 spinner 覆盖"LLM 流式生成 tool_call
-// 参数"这一段时间（通常占调用总耗时的 99%）。args 此时尚不完整，暂以纯工具名
-// 为 summary；等真正的 ProgressToolStart 到来时会补齐带参数的 summary。
-func (o *observer) ensureSubagentToolStarted(agent, tool string) {
-	if agent == "" || tool == "" {
-		return
-	}
-	if _, ok := o.toolStarts[agent]; ok {
-		return // 已有进行中调用，幂等
-	}
-	o.resetStreamArgLabel(agent, tool)
-	id := nextEventID()
-	o.toolStarts[agent] = &activeCall{
-		id:      id,
-		start:   time.Now(),
-		summary: tool, // 先用纯工具名，ProgressToolStart 到来时可能更新为 tool(第N章)
-		depth:   1,
-	}
-	o.emitAndLog(Event{
-		ID:       id,
-		Time:     time.Now(),
-		Category: "TOOL",
-		Agent:    agent,
-		Summary:  tool,
-		Level:    "info",
-		Depth:    1,
-	})
-	o.updateAgent(agent, func(a *agentState) {
-		a.state = "working"
-		a.tool = tool
-	})
-	o.emitFallbackStreamHeader(tool)
-}
-
-func (o *observer) resetStreamArgLabel(agent, tool string) {
-	key := streamArgKey(agent, tool)
-	delete(o.streamArgPrefixes, key)
-	delete(o.streamArgLabels, key)
-}
-
 // emitFallbackStreamHeader 给未配置 extractor 的工具补一行 ✻ 标题到流面板。
-// 两条路径都要调用以保证一致：
-//  1. ensureSubagentToolStarted —— subagent 流式 tool args（DeltaToolCall）
-//  2. handleToolUpdate ProgressToolStart —— subagent 非流式 tool args
-//
-// 缺任何一条，流式与非流式模型的工具标题就会表现不一致。
+// 长内容工具的 header 由 extractor 随参数流输出；其他工具在
+// ProgressToolStart 到来时补齐。
 func (o *observer) emitFallbackStreamHeader(tool string) {
 	if _, has := toolDisplays[tool]; has {
 		return // 有 extractor，header 由 extractor 自行输出

@@ -19,10 +19,9 @@ func testObserver(events *[]Event) *observer {
 		agents:              make(map[string]*agentState),
 		lastThinkingByAgent: make(map[string]string),
 		dispatchStarts:      make(map[string]*activeCall),
+		modelStarts:         make(map[string]*activeCall),
 		toolStarts:          make(map[string]*activeCall),
 		streamExtractors:    make(map[string]*agentExtractor),
-		streamArgPrefixes:   make(map[string]string),
-		streamArgLabels:     make(map[string]string),
 		retryEvents:         make(map[string]string),
 	}
 }
@@ -112,49 +111,62 @@ func TestObserverDispatchErrorUpdatesSingleEventWithDetail(t *testing.T) {
 	}
 }
 
-func TestObserverSubagentToolDeltaUpdatesSaveFoundationType(t *testing.T) {
+func TestObserverSeparatesModelResponseFromToolExecution(t *testing.T) {
 	var events []Event
 	o := testObserver(&events)
 
+	o.handleWorkerEvent("writer", agentcore.Event{Type: agentcore.EventTurnStart})
+	o.handleThinkingProgress(agentcore.Event{Progress: &agentcore.ProgressPayload{
+		Agent: "writer", Thinking: "正在分析章节计划",
+	}})
 	o.handleSubagentDelta(&agentcore.ProgressPayload{
 		Kind:      agentcore.ProgressToolDelta,
-		Agent:     "architect_long",
-		Tool:      "save_foundation",
+		Agent:     "writer",
+		Tool:      "draft_chapter",
 		DeltaKind: agentcore.DeltaToolCall,
-		Delta:     `{"type":"premise","content":"# 书名`,
+		Delta:     `{"chapter":11,"content":"第十一章`,
 	})
 
-	if len(events) < 2 {
-		t.Fatalf("events = %d, want start + summary update", len(events))
+	if len(events) != 3 {
+		t.Fatalf("events = %d, want MODEL start + two state updates", len(events))
 	}
-	if events[0].Category != "TOOL" || events[0].Summary != "save_foundation" || events[0].Depth != 1 {
-		t.Fatalf("start event = %+v", events[0])
+	if events[0].Category != "MODEL" || events[0].Summary != "等待模型" || !events[0].Running() {
+		t.Fatalf("model start = %+v", events[0])
 	}
-	if events[1].ID != events[0].ID || events[1].Summary != "save_foundation[premise]" {
-		t.Fatalf("summary update = %+v, start = %+v", events[1], events[0])
+	if events[1].ID != events[0].ID || events[1].Summary != "思考中" {
+		t.Fatalf("thinking update = %+v", events[1])
 	}
-}
-
-func TestObserverSubagentToolDeltaUpdatesSaveFoundationTypeAcrossChunks(t *testing.T) {
-	var events []Event
-	o := testObserver(&events)
-
-	for _, delta := range []string{`{"ty`, `pe":"premise","content":"# 书名`} {
-		o.handleSubagentDelta(&agentcore.ProgressPayload{
-			Kind:      agentcore.ProgressToolDelta,
-			Agent:     "architect_long",
-			Tool:      "save_foundation",
-			DeltaKind: agentcore.DeltaToolCall,
-			Delta:     delta,
-		})
+	if events[2].ID != events[0].ID || events[2].Summary != "生成 draft_chapter" {
+		t.Fatalf("generation update = %+v", events[2])
+	}
+	if len(o.toolStarts) != 0 {
+		t.Fatal("生成工具参数时不应启动 TOOL 计时")
 	}
 
-	var summaries []string
-	for _, ev := range events {
-		summaries = append(summaries, ev.Summary)
+	o.handleWorkerEvent("writer", agentcore.Event{
+		Type:    agentcore.EventMessageEnd,
+		Message: agentcore.Message{Role: agentcore.RoleAssistant},
+	})
+	o.handleToolUpdate(agentcore.Event{Progress: &agentcore.ProgressPayload{
+		Kind: agentcore.ProgressToolStart, Agent: "writer", Tool: "draft_chapter",
+		Args: json.RawMessage(`{"chapter":11}`),
+	}})
+	o.handleToolUpdate(agentcore.Event{Progress: &agentcore.ProgressPayload{
+		Kind: agentcore.ProgressToolEnd, Agent: "writer", Tool: "draft_chapter",
+	}})
+
+	if len(events) != 6 {
+		t.Fatalf("events = %d, want MODEL finish + TOOL start/finish", len(events))
 	}
-	if !strings.Contains(strings.Join(summaries, "\n"), "save_foundation[premise]") {
-		t.Fatalf("summaries = %v, want save_foundation[premise]", summaries)
+	modelEnd, toolStart, toolEnd := events[3], events[4], events[5]
+	if modelEnd.ID != events[0].ID || modelEnd.Summary != "模型响应" || modelEnd.FinishedAt.IsZero() {
+		t.Fatalf("model end = %+v", modelEnd)
+	}
+	if toolStart.Category != "TOOL" || toolStart.Summary != "draft_chapter(第11章)" || !toolStart.Running() {
+		t.Fatalf("tool start = %+v", toolStart)
+	}
+	if toolEnd.ID != toolStart.ID || toolEnd.FinishedAt.IsZero() {
+		t.Fatalf("tool end = %+v", toolEnd)
 	}
 }
 

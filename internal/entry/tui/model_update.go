@@ -428,9 +428,9 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		m.applyEventProjection(ev)
 		m.refreshEventViewport()
 		cmd := listenEvents(m.runtime)
-		if !hadRunningEvent && m.hasRunningEvent() && !m.toolTicking {
-			m.toolTicking = true
-			cmd = tea.Batch(cmd, tickToolSpinner())
+		if !hadRunningEvent && m.hasRunningEvent() && !m.eventSpinnerActive {
+			m.eventSpinnerActive = true
+			cmd = tea.Batch(cmd, tickEventSpinner())
 		}
 		return m, cmd, true
 	case bootstrapMsg:
@@ -679,13 +679,13 @@ func (m Model) handleRuntimeMsg(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 			s.refresh(paddedModalContentWidth(boxW))
 		}
 		return m, tickSpinner(), true
-	case toolSpinnerTickMsg:
-		m.toolSpinnerIdx = (m.toolSpinnerIdx + 1) % len(toolSpinnerFrames)
+	case eventSpinnerTickMsg:
+		m.eventSpinnerIdx = (m.eventSpinnerIdx + 1) % len(eventSpinnerFrames)
 		if m.hasRunningEvent() {
 			m.refreshEventViewport()
-			return m, tickToolSpinner(), true
+			return m, tickEventSpinner(), true
 		}
-		m.toolTicking = false
+		m.eventSpinnerActive = false
 		return m, nil, true
 	case streamDeltaMsg:
 		if len(m.streamRounds) == 0 {
